@@ -51,7 +51,9 @@ before moving on.
 3. **Pi blogs** — design philosophy and user perspective
    - https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
    - https://lucumr.pocoo.org/2026/1/31/pi/
-4. **litellm docs** — https://docs.litellm.ai/ — our LLM provider layer
+4. **litellm** — our LLM provider layer
+   - Source code: `../litellm/litellm/` (cloned locally)
+   - Docs: https://docs.litellm.ai/
    - Streaming: https://docs.litellm.ai/docs/completion/stream
    - Reasoning/thinking: https://docs.litellm.ai/docs/reasoning_content
 5. **Existing projects** for reference:
