@@ -31,6 +31,36 @@ py_pi_agent/
 
 ---
 
+## Key Design Decisions (and why)
+
+**Why litellm?** Pi built ~6,800 lines of provider-specific code (Anthropic, OpenAI, Google, Bedrock,
+etc.) to normalize streaming, tool calls, and thinking traces across providers. litellm does the same
+thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that.
+
+**Why Pydantic (not jsonschema)?** Pi uses AJV (JavaScript JSON Schema validator) with `coerceTypes: true`
+to fix LLM mistakes like sending `"42"` instead of `42`. Python's `jsonschema` library doesn't coerce.
+Pydantic does — it validates AND coerces naturally. It's the Python equivalent of AJV + TypeBox.
+
+**Why asyncio (not threading or trio)?** litellm, FastHTML, FastAPI, and Textual all use asyncio.
+Threading can't do steering/interruption cleanly. Trio is cleaner but fights the ecosystem. asyncio
+is the practical choice — everything we want to plug into already speaks it.
+
+**Why two layers (loop functions + Agent class)?** Same as pi. The raw loop (`run_loop`, `agent_loop`,
+`agent_loop_continue`) is the engine — stateless, returns an EventStream. The Agent class wraps it
+with state management (messages, queues, streaming flag, abort). Consumers can use either layer.
+Most will use the Agent class. Advanced consumers may use the raw loop directly.
+
+**Why sequential tool execution (not parallel)?** Steering. After each tool finishes, the loop checks
+for user interruption. If tools run in parallel, you can't skip the rest — you'd have to cancel
+already-running tools. Sequential is simpler and matches pi.
+
+**How sub-agents work:** The core loop has no sub-agent concept. A tool can internally call `run_agent()`
+to spawn a child agent — it's just a function calling another function. The parent sees it as a slow
+tool that returned text. No special machinery needed. The loop's primitives (EventStream, tools, config)
+are sufficient.
+
+---
+
 ## EventStream
 
 Async producer-consumer queue. The loop pushes events, consumers iterate.
@@ -212,15 +242,15 @@ agent.follow_up_mode = "one-at-a-time"
 ```python
 # Agent lifecycle
 {"type": "agent_start"}
-{"type": "agent_end", "messages": [...]}
+{"type": "agent_end", "messages": [...]}  # only NEW messages from this run, not full history
 
 # Turn lifecycle (one LLM call + tool executions)
 {"type": "turn_start"}
 {"type": "turn_end", "message": ..., "tool_results": [...]}
 
-# Message lifecycle
+# Message lifecycle — emitted for ALL message types (user, assistant, tool result, steering)
 {"type": "message_start", "message": ...}
-{"type": "message_update", "message": ..., "delta": ...}   # streaming tokens
+{"type": "message_update", "message": ..., "delta": ...}   # assistant only — streaming tokens
 {"type": "message_end", "message": ...}
 
 # Streaming deltas (within message_update)
@@ -438,6 +468,7 @@ Built from the finalized litellm response (not reassembled deltas):
         "total_tokens": 2691,
     },
     "stop_reason": "stop" | "tool_use" | "length" | "error" | "aborted",
+    "timestamp": 1708531200000,                      # Unix ms — added to every message (same as pi)
 }
 ```
 
@@ -455,6 +486,7 @@ class AgentConfig:
     model: str                              # litellm model string
 
     # REQUIRED: filter messages for LLM (remove UI-only types)
+    # Can be sync or async (pi allows both)
     convert_to_llm: Callable
 
     # OPTIONAL hooks
@@ -648,14 +680,22 @@ Uses `asyncio.Event` as the cancellation signal (Python equivalent of pi's `Abor
 - [ ] Error handling: tool errors continue, LLM errors stop, synthetic error messages, finally cleanup
 - [ ] Usage tracking: extract from litellm response, attach to assistant messages
 
-### Phase 2: Prove it works
-- [ ] Build a minimal CLI example (read user input, print streamed tokens)
-- [ ] Build 2-3 toy tools (echo, sleep, fail) to test the full lifecycle
-- [ ] Test steering: send interrupt mid-tool-execution, verify remaining tools skipped
-- [ ] Test follow-up: queue message while agent is busy, verify it's delivered after idle
-- [ ] Test abort: cancel mid-stream, verify cleanup and stop_reason="aborted"
-- [ ] Test error recovery: trigger LLM error, call continue_run(), verify resumption
-- [ ] Test multi-turn: verify loop handles multiple LLM↔tool rounds correctly
+### Phase 2: Test runner + live tests
+- [ ] Build test runner (see Test Runner section below)
+- [ ] Build test tools covering all features (see Test Tools below)
+- [ ] All tests use real API calls (cheap model: haiku or gpt-4o-mini)
+- [ ] Verify: streaming tokens arrive word-by-word
+- [ ] Verify: tool calls execute and results flow back to LLM
+- [ ] Verify: multimodal — tool returns image, LLM sees it, references it in follow-up
+- [ ] Verify: thinking/reasoning traces stored and visible in events
+- [ ] Verify: multi-turn — conversation context carries forward across tool rounds
+- [ ] Verify: steering — interrupt mid-tool-execution, remaining tools skipped
+- [ ] Verify: follow-up — queued message delivered after agent idles
+- [ ] Verify: abort — cancel mid-stream, cleanup runs, stop_reason="aborted"
+- [ ] Verify: error recovery — tool throws, LLM sees error and adapts
+- [ ] Verify: continue_run() — resume after error, assistant-tail edge case
+- [ ] Verify: on_update — tool streams partial results, events arrive in real time
+- [ ] Verify: usage — token counts present on assistant messages
 
 ### Phase 3: Real-world integration
 - [ ] Wire into existing agents/ FastHTML app (replace current sync loop)
@@ -691,3 +731,169 @@ Features pi has that we intentionally skip, and why:
 | Built-in tools | Consumer's problem | No |
 
 See [COMPARISONS.md](COMPARISONS.md) for detailed comparisons with OpenAI Agents SDK and Anthropic Claude Agent SDK.
+
+---
+
+## Test Runner
+
+A stripped-down interactive agent — the first real consumer of py-pi-agent. Inspired by
+pi's coding-agent but minimal. Runs in the terminal, exercises every feature of the core loop.
+
+### Structure
+
+```
+tests/
+    runner.py           # Interactive CLI runner
+    tools.py            # Test tools covering all features
+    system_prompt.py    # System prompt for test agent
+```
+
+### Runner behavior
+
+```bash
+$ python tests/runner.py --model claude-haiku-4-5-20251001
+Tools: echo, bash, read_file, write_file, generate_chart, analyze_image,
+       slow_task, always_fail
+Type a message (ctrl+c to abort mid-run, /steer to interrupt, /quit to exit)
+
+You: make me a bar chart of Q1 through Q4 sales
+[thinking] Let me generate that chart...
+[tool_start] generate_chart {"title": "Sales by Quarter", "data": [10,25,18,30]}
+[tool_update] rendering...
+[tool_end] ok (0.3s)
+[image: data:image/png;base64,iVBOR... (24KB)]
+Assistant: Here's your quarterly sales chart. Q4 was the strongest...
+
+You: what does the chart show?
+Assistant: The chart I just generated shows four quarters...
+(^ proves LLM saw the image in conversation history)
+
+You: /steer actually make it a pie chart instead
+[steering] Redirecting...
+```
+
+### What the runner prints for each event type
+
+| Event | Display |
+|---|---|
+| `message_update` (text_delta) | Print token text inline (streaming) |
+| `message_update` (thinking_delta) | Print dim/gray `[thinking] ...` |
+| `tool_execution_start` | `[tool_start] name {args}` |
+| `tool_execution_update` | `[tool_update] partial text` |
+| `tool_execution_end` | `[tool_end] ok/error (duration)` |
+| `message_end` (with images) | `[image: type, size]` |
+| `turn_end` | Separator line |
+| `agent_end` | Done, show usage summary |
+
+### Test Tools
+
+All tools are real (no mocks) and use live API calls where applicable.
+
+```python
+# 1. echo — simplest possible tool, validates basic tool calling
+async def echo(tool_call_id, params, signal=None, on_update=None):
+    """Echo back a message. Params: {"message": str}"""
+    return ToolResult(content=[{"type": "text", "text": params["message"]}])
+
+# 2. bash — real subprocess, tests on_update streaming
+async def bash(tool_call_id, params, signal=None, on_update=None):
+    """Run a shell command. Params: {"command": str}"""
+    process = await asyncio.create_subprocess_shell(
+        params["command"], stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    output = ""
+    async for line in process.stdout:
+        text = line.decode()
+        output += text
+        if on_update:
+            on_update(ToolResult(content=[{"type": "text", "text": output}]))
+    stderr = (await process.stderr.read()).decode()
+    if stderr:
+        output += f"\nstderr: {stderr}"
+    return ToolResult(content=[{"type": "text", "text": output}])
+
+# 3. read_file — local filesystem, tests simple I/O
+async def read_file(tool_call_id, params, signal=None, on_update=None):
+    """Read a file. Params: {"path": str}"""
+    content = open(params["path"]).read()
+    return ToolResult(content=[{"type": "text", "text": content}])
+
+# 4. write_file — local filesystem
+async def write_file(tool_call_id, params, signal=None, on_update=None):
+    """Write a file. Params: {"path": str, "content": str}"""
+    from pathlib import Path
+    Path(params["path"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(params["path"]).write_text(params["content"])
+    return ToolResult(content=[{"type": "text", "text": f"Wrote {params['path']}"}])
+
+# 5. generate_chart — MULTIMODAL: returns text + image
+async def generate_chart(tool_call_id, params, signal=None, on_update=None):
+    """Generate a matplotlib chart. Params: {"title": str, "labels": [str], "values": [num]}"""
+    import matplotlib.pyplot as plt
+    import io, base64
+    fig, ax = plt.subplots()
+    ax.bar(params.get("labels", ["A","B","C"]), params.get("values", [3,7,2]))
+    ax.set_title(params.get("title", "Chart"))
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    img_b64 = base64.b64encode(buf.getvalue()).decode()
+    return ToolResult(
+        content=[
+            {"type": "text", "text": f"Generated: {params.get('title', 'Chart')}"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+        ],
+        details={"chart_type": "bar"},  # UI-only metadata
+    )
+
+# 6. slow_task — tests cancellation + on_update streaming
+async def slow_task(tool_call_id, params, signal=None, on_update=None):
+    """Slow countdown. Params: {"seconds": int}"""
+    for i in range(params.get("seconds", 5), 0, -1):
+        if signal and signal.is_set():
+            raise Exception("Aborted")
+        if on_update:
+            on_update(ToolResult(content=[{"type": "text", "text": f"{i}..."}]))
+        await asyncio.sleep(1)
+    return ToolResult(content=[{"type": "text", "text": "Done!"}])
+
+# 7. always_fail — tests error path
+async def always_fail(tool_call_id, params, signal=None, on_update=None):
+    """Always raises an error. Params: {"message": str}"""
+    raise Exception(params.get("message", "This tool always fails"))
+```
+
+### System prompt (for test runner)
+
+```
+You are a test agent for the py-pi-agent library. You have these tools:
+
+- echo: Echo back a message. Use for simple tests.
+- bash: Run shell commands. Output streams line by line.
+- read_file: Read a local file.
+- write_file: Write content to a local file.
+- generate_chart: Generate a matplotlib bar chart. Returns an image.
+- slow_task: Count down for N seconds. Use to test cancellation.
+- always_fail: Always throws an error. Use to test error handling.
+
+When asked to create charts or visualizations, use generate_chart.
+When asked to read or write files, use the file tools.
+When asked to run commands, use bash.
+If the user asks you to do something that will fail, use always_fail.
+Always explain what you're doing and describe any images you receive.
+```
+
+### What this tests end-to-end
+
+| Conversation | Features exercised |
+|---|---|
+| "echo hello world" | Basic tool call, text result |
+| "run `ls -la`" | bash, on_update streaming |
+| "read the SPEC.md file" | read_file, large text result |
+| "make me a chart of A=3 B=7 C=2" | generate_chart, multimodal response (text + image) |
+| "what does that chart show?" | Multi-turn, LLM references previous image |
+| "count down from 5" then ctrl+c | slow_task, abort mid-tool, on_update |
+| "count down from 10" then `/steer stop and echo done instead" | Steering, skip remaining |
+| "try to fail with message 'test error'" | always_fail, error handling, LLM reacts to error |
+| "write a file then read it back" | Multi-tool round, write_file + read_file |
+| (use reasoning model) "explain quantum computing" | Thinking traces in events |
