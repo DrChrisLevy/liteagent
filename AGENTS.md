@@ -37,21 +37,30 @@ before moving on.
 
 ### Guides and Sources of Truth
 
-1. **SPEC.md** — overall architecture, patterns, contracts, decisions
-2. **Pi source code** (`packages/agent/src/`) — the source of truth for behavior
-   - `agent-loop.ts` — the dual loop
-   - `agent.ts` — the Agent class wrapper
-   - `types.ts` — all types and interfaces
+1. **SPEC.md** (`./SPEC.md`) — overall architecture, patterns, contracts, decisions
+2. **Pi source code** — the source of truth for behavior. 5 files, ~3,300 lines:
+   - `../pi-mono/packages/agent/src/agent-loop.ts` — the dual loop (418 lines)
+   - `../pi-mono/packages/agent/src/agent.ts` — the Agent class wrapper (~559 lines)
+   - `../pi-mono/packages/agent/src/types.ts` — all types and interfaces (195 lines)
+   - `../pi-mono/packages/agent/src/proxy.ts` — optional proxy transport (not porting)
+   - `../pi-mono/packages/agent/src/index.ts` — re-exports
+   - Supporting types in `../pi-mono/packages/ai/src/types.ts` (Usage, StopReason, Tool, EventStream, AssistantMessageEvent)
+   - Validation in `../pi-mono/packages/ai/src/utils/validation.ts`
+   - EventStream class in `../pi-mono/packages/ai/src/utils/event-stream.ts`
    - The spec captures the intent; Pi source captures the implementation details
 3. **Pi blogs** — design philosophy and user perspective
    - https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
    - https://lucumr.pocoo.org/2026/1/31/pi/
 4. **litellm docs** — https://docs.litellm.ai/ — our LLM provider layer
+   - Streaming: https://docs.litellm.ai/docs/completion/stream
+   - Reasoning/thinking: https://docs.litellm.ai/docs/reasoning_content
 5. **Existing projects** for reference:
-   - `../agents/` — the human's existing Python agent. A simpler sync loop that works.
-     Useful as a conversation anchor for "what I already understand." Not a dependency.
-   - `../pi-mono/` — the full Pi monorepo (TypeScript source). `packages/agent/src/` is
-     the 5-file core we're porting. Everything else is consumer-layer code.
+   - `../agents/agents/agent.py` — the human's existing Python agent loop (~95 lines).
+     A simpler sync loop that works. Useful as a conversation anchor for
+     "what I already understand." Not a dependency.
+   - `../agents/agents/tools.py` — existing tool definitions and execution
+   - `../pi-mono/` — the full Pi monorepo (TypeScript). Only `packages/agent/src/`
+     is the core we're porting. Everything else is consumer-layer code.
 
 ### Code Style
 
