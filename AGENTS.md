@@ -158,9 +158,10 @@ At each step: write the code, write the tests, run it, understand it, then move 
 
 We maintain a CHANGELOG.md documenting what changed and when. Update it as we go.
 
-### Git Workflow
+### Git & GitHub
 
 - `main` branch is the stable spec + docs
 - Feature branches for implementation work
 - Small, focused commits with clear messages
 - Don't commit code the human hasn't reviewed and understood
+- Use `gh` CLI for all GitHub operations (PRs, issues, releases). No MCP GitHub tools.

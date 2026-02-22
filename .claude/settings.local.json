@@ -1,0 +1,53 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(cp:*)",
+      "Bash(curl:*)",
+      "Bash(cut:*)",
+      "Bash(diff:*)",
+      "Bash(dirname:*)",
+      "Bash(echo:*)",
+      "Bash(env:*)",
+      "Bash(find:*)",
+      "Bash(for:*)",
+      "Bash(gh:*)",
+      "Bash(git:*)",
+      "Bash(grep:*)",
+      "Bash(head:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(ps:*)",
+      "Bash(pwd:*)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(sed:*)",
+      "Bash(sort:*)",
+      "Bash(stat:*)",
+      "Bash(tail:*)",
+      "Bash(touch:*)",
+      "Bash(tr:*)",
+      "Bash(tree:*)",
+      "Bash(uniq:*)",
+      "Bash(uv:*)",
+      "Bash(wc:*)",
+      "Bash(which:*)",
+      "Bash(xargs:*)",
+      "Bash(./dev:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:docs.litellm.ai)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)"
+    ]
+  }
+}
