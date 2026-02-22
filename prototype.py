@@ -530,36 +530,112 @@ def skip_tool_call(tc: dict, stream: EventStream) -> dict:
 # Port of agent.ts's Agent class. Wraps the loop with state management.
 
 
-def default_convert_to_llm(messages: list) -> list:
-    """Keep only LLM-compatible messages."""
-    result = []
-    for m in messages:
-        if m["role"] == "assistant":
-            msg = {"role": "assistant"}
-            if m.get("content"):
-                msg["content"] = m["content"]
-            if m.get("tool_calls"):
-                msg["tool_calls"] = m["tool_calls"]
-            result.append(msg)
-        elif m["role"] == "user":
-            result.append({"role": "user", "content": m["content"]})
-        elif m["role"] == "tool":
-            # Convert our tool results to litellm format
-            # Keep text and image_url blocks (both are LLM-compatible)
-            content = m["content"]
-            if isinstance(content, list):
-                llm_blocks = [
-                    b for b in content if b.get("type") in ("text", "image_url")
-                ]
-                # litellm expects string content for tool results with text only
-                if all(b["type"] == "text" for b in llm_blocks):
-                    content = "\n".join(b["text"] for b in llm_blocks)
+def make_convert_to_llm(model: str) -> Callable:
+    """Build a convert_to_llm function with provider-specific handling.
+
+    OpenAI workaround: OpenAI tool messages only support string content — image_url
+    blocks are silently ignored. Pi-mono handles this the same way (openai-completions.ts
+    lines 648-713): strip images from tool results, inject them as a user message after.
+    Anthropic and Gemini support image_url in tool results natively.
+    """
+    is_openai = model.startswith("gpt") or model.startswith("openai/")
+
+    def convert(messages: list) -> list:
+        result = []
+        pending_images = []
+
+        for m in messages:
+            # Flush pending images as a user message before any non-tool message
+            if pending_images and m["role"] != "tool":
+                result.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Attached image(s) from tool result:",
+                            },
+                            *pending_images,
+                        ],
+                    }
+                )
+                pending_images = []
+
+            if m["role"] == "assistant":
+                msg = {"role": "assistant"}
+                if m.get("content"):
+                    msg["content"] = m["content"]
+                if m.get("tool_calls"):
+                    msg["tool_calls"] = m["tool_calls"]
+                result.append(msg)
+
+            elif m["role"] == "user":
+                result.append({"role": "user", "content": m["content"]})
+
+            elif m["role"] == "tool":
+                content = m["content"]
+                if isinstance(content, list):
+                    text_parts = [b["text"] for b in content if b.get("type") == "text"]
+                    images = [b for b in content if b.get("type") == "image_url"]
+                    text = "\n".join(text_parts)
+
+                    if is_openai and images:
+                        # OpenAI: text-only tool result, collect images for user msg
+                        result.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": m["tool_call_id"],
+                                "content": text or "(see attached image)",
+                            }
+                        )
+                        pending_images.extend(images)
+                    elif images:
+                        # Anthropic/Gemini: pass content array with images
+                        llm_blocks = [
+                            b for b in content if b.get("type") in ("text", "image_url")
+                        ]
+                        result.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": m["tool_call_id"],
+                                "content": llm_blocks,
+                            }
+                        )
+                    else:
+                        result.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": m["tool_call_id"],
+                                "content": text,
+                            }
+                        )
                 else:
-                    content = llm_blocks  # mixed text+images: pass as content array
+                    result.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": m["tool_call_id"],
+                            "content": content,
+                        }
+                    )
+
+        # Flush any remaining images
+        if pending_images:
             result.append(
-                {"role": "tool", "tool_call_id": m["tool_call_id"], "content": content}
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Attached image(s) from tool result:",
+                        },
+                        *pending_images,
+                    ],
+                }
             )
-    return result
+
+        return result
+
+    return convert
 
 
 class Agent:
@@ -580,7 +656,7 @@ class Agent:
             thinking_level=thinking_level,
             tools=tools or [],
         )
-        self._convert_to_llm = convert_to_llm or default_convert_to_llm
+        self._convert_to_llm = convert_to_llm or make_convert_to_llm(model)
         self._transform_context = transform_context
         self._steering_mode = steering_mode
         self._follow_up_mode = follow_up_mode
