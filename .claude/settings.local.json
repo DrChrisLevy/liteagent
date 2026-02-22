@@ -42,12 +42,14 @@
       "WebFetch(domain:pypi.org)",
       "WebFetch(domain:docs.litellm.ai)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:ai.pydantic.dev)"
     ],
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git reset --hard:*)",
-      "Bash(rm -rf:*)"
+      "Bash(rm -rf:*)",
+      "Read(.env.*)"
     ]
   }
 }
