@@ -1,6 +1,11 @@
 """
 py-pi-agent in one file. Minimal Python port of pi-mono's agent loop.
 Uses litellm for LLM calls, Pydantic for tool validation, asyncio for concurrency.
+
+Usage:
+    uv run python prototype.py                                          # interactive, default model (Claude Opus)
+    uv run python prototype.py --model gemini/gemini-3-flash-preview    # interactive, specific model
+    uv run python prototype.py --test                                   # multimodal spike test across all 5 target models
 """
 
 import asyncio
@@ -250,7 +255,8 @@ async def stream_llm_response(
     # Stream the response
     text_content = ""
     reasoning_content = ""
-    thinking_blocks = []
+    thinking_blocks = []  # finalized blocks (merged from deltas)
+    _cur_thinking = {"thinking": "", "signature": ""}  # accumulator for current block
     tool_calls_map = {}  # index -> {id, name, arguments_str}
     usage = {}
     finish_reason = None
@@ -298,9 +304,17 @@ async def stream_llm_response(
                     )
 
                 # Thinking blocks (Anthropic only — includes cryptographic signatures)
+                # Deltas are fragments — merge into one block per thinking sequence
                 delta_blocks = getattr(delta, "thinking_blocks", None)
                 if delta_blocks:
-                    thinking_blocks.extend(delta_blocks)
+                    for b in delta_blocks:
+                        _cur_thinking["thinking"] += b.get("thinking", "")
+                        if b.get("signature"):
+                            _cur_thinking["signature"] = b["signature"]
+                            thinking_blocks.append(
+                                {"type": "thinking", **_cur_thinking}
+                            )
+                            _cur_thinking = {"thinking": "", "signature": ""}
 
                 # Tool call delta
                 if delta.tool_calls:
@@ -372,7 +386,8 @@ async def stream_llm_response(
                 "type": "function",
                 "function": {"name": tc["name"], "arguments": tc["arguments"]},
             }
-            for tc in sorted(tool_calls_map.values(), key=lambda x: x["id"])
+            for idx in sorted(tool_calls_map)
+            for tc in [tool_calls_map[idx]]
         ]
 
     stop_reason = "aborted" if signal.is_set() else (finish_reason or "stop")
@@ -567,6 +582,10 @@ def make_convert_to_llm(model: str) -> Callable:
                     msg["content"] = m["content"]
                 if m.get("tool_calls"):
                     msg["tool_calls"] = m["tool_calls"]
+                if m.get("thinking_blocks"):
+                    msg["thinking_blocks"] = m["thinking_blocks"]
+                if m.get("reasoning_content"):
+                    msg["reasoning_content"] = m["reasoning_content"]
                 result.append(msg)
 
             elif m["role"] == "user":
@@ -1064,16 +1083,29 @@ DEFAULT_MODEL = "anthropic/claude-opus-4-6"
 
 async def test_multimodal(model: str) -> dict:
     """Test: plot a chart, then ask about the spike. Returns ground truth + LLM answer."""
-    agent = Agent(model=model, tools=DEMO_TOOLS, system_prompt=SYSTEM_PROMPT)
+    agent = Agent(
+        model=model,
+        tools=DEMO_TOOLS,
+        system_prompt=SYSTEM_PROMPT,
+        thinking_level="medium",
+    )
 
     # Turn 1: generate the plot
     spike_info = {}
+    error = None
     async for event in agent.prompt("plot server response times for the last 90 days"):
         if (
             event["type"] == "tool_execution_end"
             and event["tool_name"] == "plot_timeseries"
         ):
             spike_info = event["result"].details  # ground truth
+        if event["type"] == "message_end":
+            msg = event["message"]
+            if msg.get("stop_reason") == "error":
+                error = msg.get("content", "unknown error")
+
+    if error:
+        return {"model": model, "spike_date": "?", "answer": "", "error": error}
 
     # Turn 2: ask about the spike (LLM must look at the image)
     answer = ""
@@ -1087,11 +1119,16 @@ async def test_multimodal(model: str) -> dict:
             delta = event["delta"]
             if delta.content:
                 answer += delta.content
+        if event["type"] == "message_end":
+            msg = event["message"]
+            if msg.get("stop_reason") == "error":
+                error = msg.get("content", "unknown error")
 
     return {
         "model": model,
         "spike_date": spike_info.get("spike_date", "?"),
         "answer": answer[:200],
+        "error": error,
     }
 
 
@@ -1107,6 +1144,11 @@ async def test_all_models():
     print("Multimodal spike detection test\n")
     results = await asyncio.gather(*[test_multimodal(m) for m in models])
     for r in results:
+        if r.get("error"):
+            print(f"  [ERROR] {r['model']}")
+            print(f"          {r['error'][:200]}")
+            print()
+            continue
         spike = r["spike_date"]
         answer = r["answer"].lower()
         # Check for month + day match (lenient: "March 04" matches "march 4", "march 4th", etc.)
@@ -1135,7 +1177,12 @@ if __name__ == "__main__":
                 if arg == "--model" and i + 2 < len(sys.argv):
                     model = sys.argv[i + 2]
 
-            agent = Agent(model=model, tools=DEMO_TOOLS, system_prompt=SYSTEM_PROMPT)
+            agent = Agent(
+                model=model,
+                tools=DEMO_TOOLS,
+                system_prompt=SYSTEM_PROMPT,
+                thinking_level="medium",
+            )
             print(f"Model: {model}")
             print(f"Tools: {', '.join(t.name for t in DEMO_TOOLS)}")
             print("Type a message (ctrl+c to quit)\n")
@@ -1150,6 +1197,17 @@ if __name__ == "__main__":
                 async for event in agent.prompt(user_input):
                     t = event["type"]
                     if (
+                        t == "message_update"
+                        and event.get("delta_type") == "thinking_delta"
+                    ):
+                        delta = event["delta"]
+                        if getattr(delta, "reasoning_content", None):
+                            print(
+                                f"\033[2m{delta.reasoning_content}\033[0m",
+                                end="",
+                                flush=True,
+                            )
+                    elif (
                         t == "message_update"
                         and event.get("delta_type") == "text_delta"
                     ):

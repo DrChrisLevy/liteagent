@@ -84,8 +84,8 @@ class EventStream:
     def push(self, event: dict):
         """Producer pushes events (non-blocking)."""
 
-    def end(self):
-        """Signal stream completion."""
+    def end(self, result):
+        """Signal stream completion and store final result."""
 
     async def result(self) -> list:
         """Await final result (all messages)."""
@@ -214,9 +214,9 @@ class Agent:
 class AgentState:
     system_prompt: str
     model: str
-    thinking_level: str             # "off", "minimal", "low", "medium", "high", "xhigh"
+    thinking_level: str             # "off", "low", "medium", "high"
                                     # "off" = don't send reasoning_effort to litellm
-                                    # others map to litellm's reasoning_effort param directly
+                                    # others passed to litellm's reasoning_effort param directly
     tools: list[Tool]
     messages: list                  # full message history
     is_streaming: bool              # True while loop is running
@@ -390,7 +390,9 @@ raw parsed args are passed through — same as pi's browser fallback behavior.
 
 - **Sequential** (same as pi) — one tool at a time
 - After each tool: check steering queue for user interruption
-- If steering: skip remaining tools, mark skipped as error with "Skipped due to queued user message"
+- If steering: skip remaining tools, generate synthetic tool result messages for each skipped tool
+  with `is_error=True` and content "Skipped due to queued user message." — this keeps tool call/result
+  pairing balanced (some providers reject orphaned tool calls without matching results)
 - Tools receive `signal` for cancellation and `on_update` callback for streaming
 
 ---
@@ -398,7 +400,27 @@ raw parsed args are passed through — same as pi's browser fallback behavior.
 ## Dual Loop Architecture
 
 ```python
-async def run_loop(context, config, stream, signal):
+# Entry points — emit agent_start, then delegate to run_loop
+# (In pi-mono these are agentLoop() and agentLoopContinue())
+
+def agent_loop(messages, context, config, signal) -> EventStream:
+    stream = EventStream()
+    async def run():
+        stream.push({"type": "agent_start"})
+        stream.push({"type": "turn_start"})
+        for m in messages:
+            stream.push({"type": "message_start", "message": m})
+            stream.push({"type": "message_end", "message": m})
+            context.messages.append(m)
+        new_messages = list(messages)
+        new_messages = await run_loop(context, new_messages, config, signal, stream)
+        stream.push({"type": "agent_end", "messages": new_messages})
+        stream.end(new_messages)
+    asyncio.create_task(run())
+    return stream
+
+# The engine — no agent lifecycle events, only turn-level
+async def run_loop(context, new_messages, config, signal, stream) -> list:
     pending_messages = await config.get_steering_messages()
 
     # OUTER LOOP: handles follow-up messages after agent settles
@@ -407,10 +429,13 @@ async def run_loop(context, config, stream, signal):
 
         # INNER LOOP: LLM calls + tool execution + steering
         while has_tool_calls or pending_messages:
-            # 1. Inject steering/follow-up messages into context
-            # 2. Stream LLM response (tokens flow to EventStream)
-            # 3. Execute tools sequentially (check steering after each)
-            # 4. Loop if more tool calls or steering
+            # 1. Inject pending messages into context
+            # 2. Stream LLM response → returns assistant_msg, appended to context + new_messages
+            # 3. If error/aborted: push turn_end, return new_messages
+            # 4. Execute tools sequentially (check steering after each)
+            #    - Skipped tools get synthetic error results to keep tool call/result pairing balanced
+            # 5. Push turn_end
+            # 6. Check steering queue → set pending_messages
 
         # Agent would stop — check for queued follow-ups
         follow_ups = await config.get_follow_up_messages()
@@ -420,8 +445,7 @@ async def run_loop(context, config, stream, signal):
 
         break
 
-    stream.push({"type": "agent_end"})
-    stream.end()
+    return new_messages
 ```
 
 ### Why two loops?
@@ -509,6 +533,12 @@ This is our internal message format, assembled from litellm's response objects:
 The loop reads `tool_calls` to decide whether to continue. Thinking fields are preserved
 for future messages (Anthropic requires them back).
 
+**Important:** `convert_to_llm` must pass assistant messages through with all fields intact —
+including `thinking_blocks` and `reasoning_content`. Anthropic requires thinking blocks from
+previous turns to be sent back in subsequent requests. Stripping them will cause errors
+when extended thinking is enabled. The `convert_to_llm` hook filters/transforms *non-standard*
+message types (custom, UI-only); standard `user`, `assistant`, and `tool` messages pass through.
+
 ---
 
 ## Config (Hook Points)
@@ -518,8 +548,10 @@ for future messages (Anthropic requires them back).
 class AgentConfig:
     model: str                              # litellm model string
 
-    # REQUIRED: filter messages for LLM (remove UI-only types)
-    # Can be sync or async (pi allows both)
+    # REQUIRED: filter/transform messages for LLM
+    # Must pass user/assistant/tool messages through intact (including thinking_blocks).
+    # Used to convert custom message types (bashExecution, summaries) to user messages
+    # and filter out UI-only types. Can be sync or async (pi allows both).
     convert_to_llm: Callable
 
     # OPTIONAL hooks
@@ -528,9 +560,11 @@ class AgentConfig:
     get_follow_up_messages: Callable = None # check for queued messages
 
     # LLM parameters
-    reasoning_effort: str = None            # "minimal", "low", "medium", "high", "xhigh"
+    reasoning_effort: str = None            # "low", "medium", "high"
                                             # None = don't send to litellm (no thinking)
-                                            # litellm accepts: "none", "minimal", "low", "medium", "high", "xhigh"
+                                            # litellm passes this to providers who handle budget internally
+                                            # Pi-mono does explicit budget math (1024-16384 tokens per level)
+                                            # but modern providers handle reasoning_effort natively
     max_tokens: int = None
     temperature: float = None
 
@@ -584,7 +618,7 @@ error_msg = {
     "content": "",
     "stop_reason": "aborted" if signal.is_set() else "error",
     "error_message": str(exception),
-    "usage": {"input": 0, "output": 0, ...},  # zeroed out
+    "usage": {},  # zeroed out
 }
 # Appended to message history so consumer can see what happened
 ```
@@ -631,6 +665,30 @@ litellm returns two fields:
 - `thinking_blocks` (list) — Anthropic only, includes cryptographic signatures
 
 We store both. litellm handles sending the right format back to each provider.
+
+### Accumulating thinking blocks from streaming
+
+**Critical:** litellm's streaming `delta.thinking_blocks` are **partial fragments**, not complete blocks.
+Each chunk contains a fragment with partial thinking text and an empty signature. The final chunk
+for a block carries the cryptographic signature. You must merge these into one block per thinking
+sequence — do NOT store each delta as a separate block.
+
+```python
+# WRONG — creates many blocks with partial text, Anthropic rejects them
+thinking_blocks.extend(delta_blocks)
+
+# RIGHT — merge fragments, finalize when signature arrives
+_cur = {"thinking": "", "signature": ""}
+for b in delta_blocks:
+    _cur["thinking"] += b.get("thinking", "")
+    if b.get("signature"):
+        _cur["signature"] = b["signature"]
+        thinking_blocks.append({"type": "thinking", **_cur})
+        _cur = {"thinking": "", "signature": ""}
+```
+
+Anthropic requires every thinking block to contain non-whitespace thinking text.
+Sending unmerged fragments causes: `"each thinking block must contain non-whitespace thinking"`.
 
 ```python
 litellm.modify_params = True
@@ -779,6 +837,7 @@ Features pi has that we intentionally skip, and why:
 | Built-in provider implementations | litellm replaces all 6,800 lines | No |
 | TUI / Web UI | Consumer's problem | No |
 | Built-in tools | Consumer's problem | No |
+| Cross-model thinking conversion | Switching models mid-conversation leaves orphaned thinking blocks; `transform_context` hook can strip them if needed | Only if it causes real issues |
 
 See [COMPARISONS.md](COMPARISONS.md) for detailed comparisons with OpenAI Agents SDK and Anthropic Claude Agent SDK.
 
