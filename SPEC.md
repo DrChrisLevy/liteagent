@@ -8,6 +8,18 @@ A Python core agent loop library inspired by [pi-mono](https://github.com/badlog
 - `litellm` — unified LLM interface (Chat Completions format for all providers)
 - `pydantic` — tool argument validation + type coercion
 
+## Target Models
+
+These are the models we test against and must work with:
+
+- `anthropic/claude-opus-4-6`
+- `anthropic/claude-sonnet-4-6`
+- `gemini/gemini-3-flash-preview`
+- `gemini/gemini-3.1-pro-preview`
+- `gpt-5.2`
+
+All use litellm model strings. Tests should pass against all five.
+
 ## Project Structure
 
 ```
@@ -511,7 +523,7 @@ class AgentConfig:
     convert_to_llm: Callable
 
     # OPTIONAL hooks
-    transform_context: Callable = None      # compaction, pruning, injection
+    transform_context: Callable = None      # compaction, pruning, injection (always async, same as pi)
     get_steering_messages: Callable = None  # check for user interruption
     get_follow_up_messages: Callable = None # check for queued messages
 
@@ -522,8 +534,8 @@ class AgentConfig:
     max_tokens: int = None
     temperature: float = None
 
-    # Retry behavior
-    max_retry_delay_ms: int = 60000         # cap server-requested retry delays
+    # Retry behavior — passed to litellm, not implemented by the loop
+    max_retry_delay_ms: int = 60000
 ```
 
 ---
@@ -700,7 +712,7 @@ All decided:
 - ~~Events format~~ → Plain dicts. Match litellm's format, trivial JSON serialization, no parallel type system. Same as pi (plain objects).
 - ~~Subscribe pattern~~ → Both `async for` AND `subscribe()`. Same as pi. `async for` is the primary consumer API. `subscribe()` is used by the Agent class internally to update state from events.
 - ~~Abort propagation~~ → Check `signal.is_set()` between streaming chunks from litellm. If set, break out of the chunk loop, build a partial message with `stop_reason="aborted"`. For tool execution, tools already receive the signal. Behavior contract: abort → stop_reason="aborted", cleanup runs, agent_end emitted.
-- ~~Testing strategy~~ → Real API calls for integration tests (Phase 2, cheap models: Haiku/GPT-4o-mini). Unit tests for EventStream/types need no LLM. Mock only for error paths hard to trigger with real APIs.
+- ~~Testing strategy~~ → Real API calls for integration tests (Phase 2). Unit tests for EventStream/types need no LLM. Mock only for error paths hard to trigger with real APIs.
 - ~~Package name~~ → `py_pi_agent` (directory) / `py-pi-agent` (package). Already in pyproject.toml.
 - ~~@tool decorator~~ → Phase 4. `params_model` stays optional — tools can provide just JSON Schema (no Pydantic model required). Decorator will auto-generate both from type hints later.
 
@@ -721,7 +733,7 @@ All decided:
 ### Phase 2: Test runner + live tests
 - [ ] Build test runner (see Test Runner section below)
 - [ ] Build test tools covering all features (see Test Tools below)
-- [ ] All tests use real API calls (cheap model: haiku or gpt-4o-mini)
+- [ ] All tests use real API calls (target models below)
 - [ ] Verify: streaming tokens arrive word-by-word
 - [ ] Verify: tool calls execute and results flow back to LLM
 - [ ] Verify: multimodal — tool returns image, LLM sees it, references it in follow-up
@@ -789,7 +801,7 @@ tests/
 ### Runner behavior
 
 ```bash
-$ uv run python tests/runner.py --model claude-haiku-4-5-20251001
+$ uv run python tests/runner.py --model anthropic/claude-sonnet-4-6
 Tools: echo, bash, read_file, write_file, generate_chart, analyze_image,
        slow_task, always_fail
 Type a message (ctrl+c to abort mid-run, /steer to interrupt, /quit to exit)

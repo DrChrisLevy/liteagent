@@ -58,3 +58,9 @@ Run `./dev lint` before committing.
 - Live API calls encouraged — less mocking, more real testing
 - Fast tests run by default, slow tests (`@pytest.mark.slow`) need `-m slow`
 - Test runner: `tests/runner.py`
+- Target models (must pass all five):
+  - `anthropic/claude-opus-4-6`
+  - `anthropic/claude-sonnet-4-6`
+  - `gemini/gemini-3-flash-preview`
+  - `gemini/gemini-3.1-pro-preview`
+  - `gpt-5.2`
