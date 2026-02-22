@@ -64,6 +64,39 @@ before moving on.
    - `../pi-mono/` — the full Pi monorepo (TypeScript). Only `packages/agent/src/`
      is the core we're porting. Everything else is consumer-layer code.
 
+### Tooling
+
+**Everything runs through `uv`.** No bare `python`, `pip`, or `pytest` commands.
+
+```bash
+uv run python script.py       # run a script
+uv run ipython                 # REPL for experiments
+uv add <package>               # add a dependency (updates pyproject.toml + uv.lock)
+uv add --dev <package>         # add a dev dependency
+```
+
+**Dev script** (`./dev`) — convenience wrapper:
+
+```bash
+./dev test                     # run tests (skips @pytest.mark.slow by default)
+./dev test -m slow             # run only slow tests (real API calls)
+./dev test -m ""               # run ALL tests
+./dev lint                     # ruff check --fix + ruff format
+```
+
+**Linting:** ruff for both checking and formatting. Run `./dev lint` after code changes.
+Agents should run `./dev lint` before committing.
+
+**Testing:**
+- Fast tests (mocked/unit) run by default
+- Slow tests (real API calls) are marked `@pytest.mark.slow` and skipped by default
+- Run `./dev test -m slow` to hit real APIs
+- Tests live in `tests/`
+
+**Dependencies** (from `pyproject.toml`):
+- Runtime: `litellm`, `pydantic`
+- Dev: `pytest`, `ruff`, `ipython`
+
 ### Code Style
 
 - **Beautiful, minimal, hackable Python**
