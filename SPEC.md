@@ -203,6 +203,8 @@ class AgentState:
     system_prompt: str
     model: str
     thinking_level: str             # "off", "minimal", "low", "medium", "high", "xhigh"
+                                    # "off" = don't send reasoning_effort to litellm
+                                    # others map to litellm's reasoning_effort param directly
     tools: list[Tool]
     messages: list                  # full message history
     is_streaming: bool              # True while loop is running
@@ -250,14 +252,21 @@ agent.follow_up_mode = "one-at-a-time"
 
 # Message lifecycle — emitted for ALL message types (user, assistant, tool result, steering)
 {"type": "message_start", "message": ...}
-{"type": "message_update", "message": ..., "delta": ...}   # assistant only — streaming tokens
+{"type": "message_update", "message": ..., "delta": ..., "delta_type": ...}  # assistant only — streaming
 {"type": "message_end", "message": ...}
 
 # Streaming deltas (within message_update)
-# delta.type can be:
-#   "text_delta"      — text token from LLM
-#   "thinking_delta"  — reasoning/thinking token
-#   "tool_call_delta" — tool call arguments streaming
+#
+# The "delta" field contains the raw litellm chunk delta (OpenAI format):
+#   delta.content            — text token from LLM (str or None)
+#   delta.reasoning_content  — thinking/reasoning token (str or None)
+#   delta.thinking_blocks    — Anthropic thinking blocks (list or None, includes signatures)
+#   delta.tool_calls         — tool call fragments (list[ChatCompletionDeltaToolCallChunk] or None)
+#
+# We also add a "delta_type" convenience field:
+#   "text_delta"         — delta.content was present
+#   "thinking_delta"     — delta.reasoning_content was present
+#   "tool_call_delta"    — delta.tool_calls was present
 #
 # Note: deltas are for UI display only. Tool execution uses the finalized
 # assistant message from litellm, not reassembled deltas.
@@ -434,13 +443,16 @@ async def stream_llm_response(context, config, stream, signal):
         delta = chunk.choices[0].delta
 
         if delta.reasoning_content:     # thinking tokens
-            stream.push(thinking_delta_event)
+            stream.push({"type": "message_update", "message": partial_msg,
+                         "delta": delta, "delta_type": "thinking_delta"})
 
         if delta.content:               # text tokens
-            stream.push(text_delta_event)
+            stream.push({"type": "message_update", "message": partial_msg,
+                         "delta": delta, "delta_type": "text_delta"})
 
         if delta.tool_calls:            # tool call fragments
-            stream.push(tool_call_delta_event)
+            stream.push({"type": "message_update", "message": partial_msg,
+                         "delta": delta, "delta_type": "tool_call_delta"})
 
     # Build finalized assistant message from litellm response
     # This is the canonical internal format — stored in context, emitted in events
@@ -462,18 +474,25 @@ Built from the finalized litellm response (not reassembled deltas):
     ] | None,
     "thinking_blocks": [...] | None,                 # Anthropic only, includes signatures
     "reasoning_content": "thinking text" | None,     # universal, all providers
-    "usage": {                                       # from litellm response
-        "input": 1234, "output": 567,
-        "cache_read": 890, "cache_write": 0,
-        "total_tokens": 2691,
+    "usage": {                                       # from litellm response.usage
+        "prompt_tokens": 1234,                       # litellm field name (input tokens)
+        "completion_tokens": 567,                    # litellm field name (output tokens)
+        "total_tokens": 1801,                        # litellm field name
+        "cache_read_tokens": 890,                    # from usage.prompt_tokens_details.cached_tokens
+        "cache_creation_tokens": 0,                  # from usage.prompt_tokens_details.cache_creation_tokens
     },
-    "stop_reason": "stop" | "tool_use" | "length" | "error" | "aborted",
+    "stop_reason": "stop" | "tool_calls" | "length" | "error" | "aborted",
     "timestamp": 1708531200000,                      # Unix ms — added to every message (same as pi)
 }
 ```
 
-This mirrors litellm's response format. The loop reads `tool_calls` to decide whether to
-continue. Usage and stop_reason come directly from litellm. Thinking fields are preserved
+This is our internal message format, assembled from litellm's response objects:
+- `content`, `tool_calls`, `reasoning_content`, `thinking_blocks` come from `response.choices[0].message` (Message class)
+- `stop_reason` comes from `response.choices[0].finish_reason` (mapped by litellm: Anthropic "tool_use" → "tool_calls", "end_turn" → "stop")
+- `usage` comes from `response.usage` (Usage class: `prompt_tokens`, `completion_tokens`, `total_tokens`, plus `prompt_tokens_details.cached_tokens` for cache reads)
+- `error` and `aborted` stop reasons are set by our loop, not litellm
+
+The loop reads `tool_calls` to decide whether to continue. Thinking fields are preserved
 for future messages (Anthropic requires them back).
 
 ---
@@ -495,7 +514,9 @@ class AgentConfig:
     get_follow_up_messages: Callable = None # check for queued messages
 
     # LLM parameters
-    reasoning_effort: str = None            # "off", "minimal", "low", "medium", "high", "xhigh"
+    reasoning_effort: str = None            # "minimal", "low", "medium", "high", "xhigh"
+                                            # None = don't send to litellm (no thinking)
+                                            # litellm accepts: "none", "minimal", "low", "medium", "high", "xhigh"
     max_tokens: int = None
     temperature: float = None
 
@@ -571,16 +592,19 @@ finally:
 
 ```python
 STOP_REASONS = {
-    "stop":     # LLM finished naturally, no more tool calls
-    "length":   # LLM hit max token limit
-    "tool_use": # LLM wants to call tool(s) — loop continues
-    "error":    # LLM request failed, stream error
-    "aborted":  # User called abort()
+    "stop":       # LLM finished naturally, no more tool calls
+    "length":     # LLM hit max token limit
+    "tool_calls": # LLM wants to call tool(s) — loop continues
+    "error":      # LLM request failed, stream error
+    "aborted":    # User called abort()
 }
 ```
 
+> **Note:** litellm normalizes all providers to OpenAI format. Anthropic's `"tool_use"` and
+> `"end_turn"` become `"tool_calls"` and `"stop"` respectively (see `map_finish_reason` in litellm).
+
 - `"stop"` and `"length"` → agent ends normally
-- `"tool_use"` → inner loop continues (execute tools, call LLM again)
+- `"tool_calls"` → inner loop continues (execute tools, call LLM again)
 - `"error"` and `"aborted"` → agent ends immediately
 
 ---
@@ -649,22 +673,21 @@ Uses `asyncio.Event` as the cancellation signal (Python equivalent of pi's `Abor
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-### Decided
+All decided:
+
 - ~~Dataclass vs Pydantic~~ → Pydantic for tool validation, dataclasses/dicts for messages (litellm compat)
 - ~~kwargs vs dict for tool params~~ → dict (matches JSON Schema, `execute(tool_call_id, params, signal, on_update)`)
 - ~~asyncio.Event vs Task.cancel()~~ → asyncio.Event as cancellation signal
 - ~~jsonschema vs Pydantic~~ → Pydantic
-
-### Still open
-- [ ] EventStream: `asyncio.Queue` wrapper with `asyncio.Future` for result — or simpler?
-- [ ] Events: typed dataclasses or plain dicts? Dicts are simpler for JSON serialization.
-- [ ] Subscribe pattern: multiple listeners (pi's `subscribe()`) AND `async for`, or pick one?
-- [ ] Abort propagation to litellm: mechanism TBD (spike during Phase 1), but the behavior contract is fixed — abort MUST result in stop_reason="aborted", cleanup MUST run, and the loop MUST emit agent_end.
-- [ ] Testing: mock litellm or real API calls?
-- [ ] Package name: `py_pi_agent`? `pi_agent`? `piloop`?
-- [ ] `@tool` decorator for convenience? (Phase 4, but affects whether Pydantic model is required or optional)
+- ~~EventStream implementation~~ → `asyncio.Queue` for event buffer + `asyncio.Future` for final result + `__aiter__` for consumers. Matches pi's pattern (queue + waiting callbacks + Promise).
+- ~~Events format~~ → Plain dicts. Match litellm's format, trivial JSON serialization, no parallel type system. Same as pi (plain objects).
+- ~~Subscribe pattern~~ → Both `async for` AND `subscribe()`. Same as pi. `async for` is the primary consumer API. `subscribe()` is used by the Agent class internally to update state from events.
+- ~~Abort propagation~~ → Check `signal.is_set()` between streaming chunks from litellm. If set, break out of the chunk loop, build a partial message with `stop_reason="aborted"`. For tool execution, tools already receive the signal. Behavior contract: abort → stop_reason="aborted", cleanup runs, agent_end emitted.
+- ~~Testing strategy~~ → Real API calls for integration tests (Phase 2, cheap models: Haiku/GPT-4o-mini). Unit tests for EventStream/types need no LLM. Mock only for error paths hard to trigger with real APIs.
+- ~~Package name~~ → `py_pi_agent` (directory) / `py-pi-agent` (package). Already in pyproject.toml.
+- ~~@tool decorator~~ → Phase 4. `params_model` stays optional — tools can provide just JSON Schema (no Pydantic model required). Decorator will auto-generate both from type hints later.
 
 ---
 
