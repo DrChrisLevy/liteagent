@@ -789,7 +789,7 @@ tests/
 ### Runner behavior
 
 ```bash
-$ python tests/runner.py --model claude-haiku-4-5-20251001
+$ uv run python tests/runner.py --model claude-haiku-4-5-20251001
 Tools: echo, bash, read_file, write_file, generate_chart, analyze_image,
        slow_task, always_fail
 Type a message (ctrl+c to abort mid-run, /steer to interrupt, /quit to exit)
