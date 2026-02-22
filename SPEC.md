@@ -288,7 +288,8 @@ agent.follow_up_mode = "one-at-a-time"
 class Tool:
     name: str               # LLM-facing name ("read_file", "bash")
     description: str        # LLM-facing description
-    parameters: dict        # JSON Schema for arguments (sent to LLM)
+    parameters: dict        # JSON Schema for arguments
+                            # Sent to litellm as: {"type": "function", "function": {"name", "description", "parameters"}}
     label: str = ""         # Human-readable UI label ("Read File")
     params_model: type = None  # Optional Pydantic BaseModel for validation + coercion
     execute: Callable = None   # async def(tool_call_id, params, signal, on_update) -> ToolResult
@@ -433,8 +434,9 @@ async def stream_llm_response(context, config, stream, signal):
     response = await litellm.acompletion(
         model=config.model,
         messages=llm_messages,
-        tools=config.tool_schemas,
+        tools=config.tool_schemas,          # list of {"type": "function", "function": {"name", "description", "parameters"}}
         stream=True,
+        stream_options={"include_usage": True},  # required to get usage on final streaming chunk
         reasoning_effort=config.reasoning_effort,
     )
 
@@ -619,8 +621,17 @@ litellm returns two fields:
 We store both. litellm handles sending the right format back to each provider.
 
 ```python
-litellm.modify_params = True    # auto-handles thinking_blocks in tool call conversations
+litellm.modify_params = True
 ```
+
+`modify_params` is a litellm global that auto-fixes common message format issues:
+- Inserts placeholder user messages when providers require alternating roles (Anthropic, Bedrock)
+- Adds a dummy tool definition when messages contain tool_call blocks but no `tools=` param
+- Drops the `thinking` param when assistant messages lack thinking_blocks (prevents Anthropic errors)
+- Sanitizes orphaned tool calls/results (missing tool_result for tool_use, etc.)
+
+We need this because our loop may produce message sequences that trip provider-specific
+constraints (e.g., consecutive user messages, tool calls without tools param on retry).
 
 ---
 
@@ -628,6 +639,10 @@ litellm.modify_params = True    # auto-handles thinking_blocks in tool call conv
 
 Usage is tracked **per assistant message**, not aggregated by the loop.
 See [Canonical Assistant Message Shape](#canonical-assistant-message-shape) for the exact usage fields.
+
+**Streaming usage:** By default, litellm streaming does NOT include usage on chunks. You must pass
+`stream_options={"include_usage": True}` to `acompletion()` to get a usage object on the final chunk.
+Without this, `chunk.usage` is None on every chunk. We always pass this option.
 
 Consumer aggregates across turns via `message_end` events or by summing from `agent.messages`.
 Cost calculation is available from litellm's response metadata if needed — we pass through
