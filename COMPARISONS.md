@@ -95,14 +95,129 @@ you implement everything.
 
 ---
 
-## Three-Way Philosophy Comparison
+## py-pi-agent vs Pydantic AI
 
-| | Claude Agent SDK | OpenAI Agents SDK | py-pi-agent |
-|---|---|---|---|
-| **Approach** | Claude Code as a library | Multi-agent framework | Core agent loop library |
-| **Agent loop** | Black box | Visible but managed | Fully explicit |
-| **Tools** | Built-in | Decorators + hosted | You define everything |
-| **Models** | Claude only | OpenAI-first | Any (litellm) |
-| **Lock-in** | Claude models | OpenAI ecosystem | None |
-| **Target user** | "I want Claude Code in my app" | "I want a multi-agent system fast" | "I want to understand and control the loop" |
-| **Complexity** | Medium | High | Low |
+[Pydantic AI](https://ai.pydantic.dev/) (~15k GitHub stars) is from the Pydantic team. Their pitch:
+"Bring that FastAPI feeling to GenAI app development." Type-safe, model-agnostic, production-grade.
+
+### Fundamental difference
+
+Pydantic AI agents are **declarative and stateless** — you define an `Agent[DepsType, OutputType]`,
+call `run()` with inputs, get a result back. py-pi-agent agents are **stateful** — they hold message
+history, streaming state, and queues. You interact via `prompt()`, `steer()`, `follow_up()`, `abort()`.
+Pydantic AI has no concept of steering or follow-ups.
+
+### What Pydantic AI has that we don't (and whether we care)
+
+| Pydantic AI feature | Our stance |
+|---|---|
+| `@agent.tool` decorator (auto schema from type hints + docstrings) | Want this — Phase 4 TODO (same as OpenAI SDK's `@function_tool`) |
+| Structured output (`output_type` → Pydantic model, with self-correcting validation) | Their best feature. Could add later. |
+| Dependency injection (`RunContext[DepsType]`, type-safe) | Clean pattern — consider for Phase 4 |
+| `FallbackModel` (auto model failover) | Nice. Consumer can implement externally for now. |
+| History processors (pluggable message history modification) | We have `transform_context` — equivalent concept. |
+| Output validators with `ModelRetry` (validation failures fed back to LLM) | Clever self-correction loop. Could add later. |
+| Three output modes (tool-based, native, prompted) | Adapts to model capabilities. Sophisticated. |
+| Logfire/OpenTelemetry observability | Don't need — consumer's problem |
+| Graph-based workflows (typed state machines) | Don't need — sub-agents via tools works fine |
+| Durable execution (Temporal, DBOS, Prefect) | Don't need — consumer's problem |
+| MCP + A2A protocol support | Could add later |
+
+### What we have that Pydantic AI doesn't
+
+| py-pi-agent feature | Why it matters |
+|---|---|
+| **Steering (mid-run interruption)** | User can redirect agent while it's executing tools. Pydantic AI has no equivalent — `run()` is fire-and-forget. |
+| **Follow-up messages** | Queue messages that wait until agent finishes. Pydantic AI doesn't support this. |
+| **Streaming tool output (`on_update`)** | Tools can push partial results (e.g., bash output line-by-line). Pydantic AI tools return all-or-nothing. |
+| **Cancellation signal to tools** | `asyncio.Event` propagated through entire chain. Pydantic AI tools can't be cancelled mid-execution. |
+| **Stateful agent** | Message history persists across calls. Pydantic AI requires passing `message_history=` manually each time. |
+| **Dual while-loop architecture** | Inner loop (tools + steering), outer loop (follow-ups). Enables complex interaction patterns. |
+| **Sequential tool execution** | Enables steering between tools. Pydantic AI tool execution model doesn't support interruption. |
+| **Minimal core** | ~300 lines of loop code. Pydantic AI is a large framework (thousands of lines). |
+
+### Different philosophies
+
+- **Pydantic AI**: "FastAPI for AI" — type-safe, batteries-included, production-grade, backed by VC-funded company. Optimized for structured output and observability. Declarative agents, stateless runs.
+- **py-pi-agent**: "Here's the core loop, bring your own everything" — minimal, stateful, hackable. Optimized for real-time interaction (steering, follow-ups, streaming). You understand every line.
+
+### Ideas to steal from Pydantic AI
+
+- Self-correcting structured output — validation failures fed back to LLM with specific error message, creating a reflection loop. Smartest structured output approach of any framework.
+- `@agent.tool` with docstring parsing (Google, NumPy, Sphinx formats) — richer schema generation than just type hints.
+- `ModelRetry` exception — clean pattern for tools to request LLM retry with feedback.
+- `FallbackModel` — automatic provider failover. Simple concept, high value for production.
+
+---
+
+## py-pi-agent vs pi-mono (our origin)
+
+[pi-mono](https://github.com/badlogic/pi-mono) is the TypeScript agent framework py-pi-agent is ported
+from. Same author (pi/badlogic), battle-tested in production. This isn't a comparison of competitors —
+it's a comparison of the original and its Python translation.
+
+### What we're faithfully porting
+
+| pi-mono pattern | py-pi-agent equivalent |
+|---|---|
+| Dual while-loop (`runLoop()` in `agent-loop.ts`) | Same architecture in `loop.py` |
+| `EventStream<T, R>` async queue | `EventStream` in `stream.py` |
+| `AgentTool` with `execute(id, params, signal, onUpdate)` | `Tool` with `execute(id, params, signal, on_update)` |
+| Steering queue (checked after each tool) | Same — `steer()` with dequeue after each tool |
+| Follow-up queue (checked when agent would stop) | Same — `follow_up()` checked at outer loop boundary |
+| `transformContext` hook (AgentMessage[] → AgentMessage[]) | `transform_context` hook |
+| `convertToLlm` hook (AgentMessage[] → Message[]) | `convert_to_llm` hook |
+| AbortSignal propagated to tools | `asyncio.Event` signal propagated to tools |
+| Sequential tool execution (enables steering) | Same design decision |
+| Stateful `Agent` class wrapping stateless loop functions | Same two-layer design |
+| Event types: message_start/update/end, tool_execution_start/update/end, turn_start/end, agent_start/end | Same event taxonomy |
+
+### What we're doing differently
+
+| Difference | pi-mono (TypeScript) | py-pi-agent (Python) |
+|---|---|---|
+| **LLM interface** | Hand-rolled providers (~6,800 lines across OpenAI, Anthropic, Google, etc.) | litellm — one `acompletion()` call handles all providers |
+| **Validation** | AJV (JSON Schema validation) | Pydantic — validates AND coerces types (e.g., `"42"` → `42`) |
+| **Proxy streaming** | Built-in proxy mode with bandwidth-optimized SSE reconstruction | Not needed — consumer handles transport |
+| **Session caching** | `sessionId` for provider-specific prompt cache hints | Not implementing — litellm handles this if needed |
+| **Transport abstraction** | SSE / WebSocket / auto toggle | Not needed — consumer picks transport |
+| **Thinking budgets** | Token-based thinking level configuration (minimal/low/medium/high) | litellm passes thinking config through natively |
+| **Dynamic API keys** | `getApiKey(provider)` callback before each LLM call (for OAuth) | litellm handles auth; consumer can override via config |
+| **Concurrency** | AbortController / AbortSignal (Web API) | asyncio.Event + asyncio cancellation (Python native) |
+
+### Why litellm changes the game
+
+pi-mono's `packages/ai/` directory contains ~6,800 lines of provider-specific streaming code:
+per-provider message conversion, chunk parsing, error handling, retry logic. All of that is replaced
+by a single litellm dependency in py-pi-agent. This is the biggest architectural simplification —
+it means our core loop can be ~300 lines instead of needing thousands of lines of provider glue.
+
+The tradeoff: we depend on litellm's correctness and maintenance. But litellm is actively maintained,
+widely used, and covers 100+ providers. The bet is worth it.
+
+### What we're NOT porting (and why)
+
+| pi-mono feature | Why we skip it |
+|---|---|
+| Proxy streaming mode | Solves browser→server routing. Python consumers don't need this — they run server-side. |
+| Transport abstraction (SSE/WebSocket) | Consumer's problem. We emit events, they choose transport. |
+| `sessionId` provider hint | litellm handles provider-specific features. |
+| `getApiKey` callback | litellm handles auth. Consumer can swap keys via litellm's API key config. |
+| Bandwidth-optimized delta reconstruction | Specific to browser streaming. Not relevant for Python library. |
+
+---
+
+## Philosophy Comparison (all five)
+
+| | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | pi-mono | py-pi-agent |
+|---|---|---|---|---|---|
+| **Approach** | Claude Code as a library | Multi-agent framework | "FastAPI for AI" | Production TS agent loop | Core Python agent loop |
+| **Agent loop** | Black box | Visible but managed | Internal (graph iteration available) | Fully explicit | Fully explicit (ported from pi-mono) |
+| **Tools** | Built-in | Decorators + hosted | Decorated functions, auto-schema | Explicit interface + execute | Explicit dataclass + execute |
+| **Models** | Claude only | OpenAI-first | 20+ providers (own abstractions) | Hand-rolled providers | Any (litellm) |
+| **Structured output** | JSON Schema | Pydantic model | First-class (3 modes + self-correction) | None | None (could add later) |
+| **Steering** | None | None | None | First-class | First-class (ported) |
+| **Streaming tools** | None | None | None | `onUpdate` callback | `on_update` callback (ported) |
+| **Lock-in** | Claude | OpenAI | None (but large framework) | None | None |
+| **Target user** | "Claude Code in my app" | "Multi-agent system fast" | "Type-safe AI apps in production" | "Full control, production TS" | "Understand the loop, learn Python" |
+| **Size** | Medium | High | Large | ~3,300 lines (5 core files) | ~300 lines target (litellm does the rest) |
