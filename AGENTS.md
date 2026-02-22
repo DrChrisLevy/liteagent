@@ -10,7 +10,7 @@ minimal, and beautiful. We just build it slowly and carefully so the human learn
 
 The goals are:
 
-1. **Learn** — async Python, agent architectures, streaming, LLM APIs
+1. **Learn** — async Python, agent architectures, streaming, LLM APIs, and everything about pi agent loop
 2. **Have fun** — explore, experiment, go down rabbit holes
 3. **Build something real** — a core agent loop that stands on its own, as good as pi's
 
@@ -26,7 +26,7 @@ before moving on.
 - Write the whole thing in one go
 - Generate large blocks of code the human hasn't reviewed
 - Skip over concepts the human doesn't understand yet
-- Write AI slop — verbose, over-commented, over-abstracted code
+- Write AI slop — verbose, over-commented, over-abstracted, code
 
 **Do:**
 - Work in small steps, from the inside out
@@ -52,7 +52,7 @@ before moving on.
    - https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
    - https://lucumr.pocoo.org/2026/1/31/pi/
 4. **litellm** — our LLM provider layer
-   - Source code: `../litellm/litellm/` (cloned locally)
+   - Source code: `../litellm/` (cloned locally)
    - Docs: https://docs.litellm.ai/
    - Streaming: https://docs.litellm.ai/docs/completion/stream
    - Reasoning/thinking: https://docs.litellm.ai/docs/reasoning_content
@@ -69,7 +69,7 @@ before moving on.
 **Everything runs through `uv`.** No bare `python`, `pip`, or `pytest` commands.
 
 ```bash
-uv run python script.py       # run a script
+uv run python script.py       # run a script or experiment
 uv run ipython                 # REPL for experiments
 uv add <package>               # add a dependency (updates pyproject.toml + uv.lock)
 uv add --dev <package>         # add a dev dependency
@@ -94,8 +94,7 @@ Agents should run `./dev lint` before committing.
 - Tests live in `tests/`
 
 **Dependencies** (from `pyproject.toml`):
-- Runtime: `litellm`, `pydantic`
-- Dev: `pytest`, `ruff`, `ipython`
+
 
 ### Code Style
 
@@ -110,16 +109,15 @@ Agents should run `./dev lint` before committing.
 ### Testing
 
 - **Live API calls are encouraged** — less mocking, more real testing
-- Use cheap models (haiku, gpt-4o-mini) to keep costs low
 - Unit tests for loop mechanics (EventStream, steering, error handling)
 - Integration tests with real LLM calls for the full lifecycle
 - The test runner (`tests/runner.py`) is the primary way to verify everything works
-- IPython REPL for quick experiments and exploration
+- IPython REPL and scripts for quick experiments and exploration
 
 ### Learning Along the Way
 
 When we encounter something the human doesn't understand, we create a **learning deep dive**:
-
+For example,
 ```
 learnings/
     async-basics/          # asyncio fundamentals
@@ -139,7 +137,7 @@ We **always** go on these detours when needed. Understanding > velocity.
 docs/                      # how the system works (written as we build)
 learnings/                 # deep dive explorations (written when we learn)
 SPEC.md                    # architecture and contracts
-COMPARISONS.md             # how we differ from OpenAI SDK, Claude SDK
+COMPARISONS.md             # how we differ from OpenAI SDK, Claude SDK, etc.
 CHANGELOG.md               # what changed and when
 AGENTS.md                  # this file
 ```

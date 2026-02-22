@@ -1,0 +1,17 @@
+[project]
+name = "py-pi-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "litellm>=1.81.14",
+    "pydantic>=2.12.5",
+]
+
+[dependency-groups]
+dev = [
+    "ipython>=9.10.0",
+    "pytest>=9.0.2",
+    "ruff>=0.15.2",
+]
