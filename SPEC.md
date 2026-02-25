@@ -191,6 +191,10 @@ class Agent:
     def set_system_prompt(self, prompt): ...
     def set_tools(self, tools): ...
     def set_thinking_level(self, level): ...
+    # All setters blocked while is_streaming. Changes take effect on next prompt()/continue_run().
+    # set_tools enables dynamic capabilities: permission escalation, plan-mode tool switching,
+    # preset configurations. Pi's coding agent uses this extensively with a tool registry pattern
+    # (all discovered tools + active subset). We provide the primitive; consumers build on it.
 
     # --- Event subscription ---
 
@@ -377,7 +381,9 @@ The loop calls `execute(tool_call_id, validated_params, signal, on_update)` — 
 
 - Pydantic validation before calling execute
 - Type coercion built-in (LLM sends "42" string → coerced to 42 int)
-- Clear error messages back to LLM on validation failure
+- On validation failure: error becomes a tool result message with `is_error=True`,
+  sent back to the LLM. The LLM sees the error and can retry with corrected args.
+  No retry logic in the loop — the LLM is the retry mechanism.
 - Pydantic is Python's equivalent of AJV + TypeBox (what pi uses in TypeScript)
 
 **Normalization path:**
@@ -591,16 +597,20 @@ The Agent class snapshots its current state into a context at the start of each 
 class AgentConfig:
     model: str                              # litellm model string
 
-    # REQUIRED: filter/transform messages for LLM
+    # REQUIRED: filter/transform messages for LLM (can be sync or async — loop awaits either)
     # Must pass user/assistant/tool messages through intact (including thinking_blocks).
     # Used to convert custom message types (bashExecution, summaries) to user messages
-    # and filter out UI-only types. Can be sync or async (pi allows both).
+    # and filter out UI-only types.
+    # Typically sync (just filtering a list). For simple agents: lambda msgs: msgs
+    # Provider gotcha: OpenAI tool messages only support string content — images are
+    # silently dropped. A provider-aware convert_to_llm can strip images from tool
+    # results and re-inject them as synthetic user messages (same workaround as pi).
     convert_to_llm: Callable
 
-    # OPTIONAL hooks
-    transform_context: Callable = None      # compaction, pruning, injection (always async, same as pi)
-    get_steering_messages: Callable = None  # check for user interruption
-    get_follow_up_messages: Callable = None # check for queued messages
+    # OPTIONAL hooks (all can be sync or async — loop awaits either)
+    transform_context: Callable = None      # compaction, pruning, injection (typically async — may call LLM)
+    get_steering_messages: Callable = None  # check for user interruption (typically async)
+    get_follow_up_messages: Callable = None # check for queued messages (typically async)
 
     # LLM parameters
     reasoning_effort: str = None            # "none", "minimal", "low", "medium", "high", "xhigh"
@@ -637,6 +647,11 @@ except Exception as e:
 `is_error` lives on the **tool result message in the conversation** (set by the loop),
 not on `ToolResult` itself. One path, one source of truth. The LLM sees the error
 text and can react (retry, try a different approach, etc.).
+
+**Provider support:** Only Anthropic has a native `is_error` field on tool results.
+OpenAI and Gemini don't — litellm strips it during conversion. The error *text* in
+content is what makes all providers understand the tool failed; `is_error` is a bonus
+signal for Anthropic and for our own event system / consumer message inspection.
 
 **LLM error** → loop STOPS immediately:
 ```python
