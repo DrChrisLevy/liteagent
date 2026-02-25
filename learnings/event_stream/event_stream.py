@@ -99,7 +99,6 @@ async def demo_basic():
     stream.push({"type": "hello", "text": "second event"})
     stream.end("done!")
 
-
     # Now consume — all 3 events are already in the queue
     async for event in stream:
         print(f"got: {event}")
@@ -176,15 +175,17 @@ async def demo_result():
     stream = EventStream()
 
     async def producer():
+        print("(producer started)")
         stream.push({"type": "working"})
         await asyncio.sleep(1)
         stream.push({"type": "still working"})
         await asyncio.sleep(1)
         stream.end(["message1", "message2"])  # the final result
 
-    asyncio.create_task(producer())
+    asyncio.create_task(producer())  # schedules producer, doesn't run it yet
+    print("(task scheduled, producer hasn't run yet)")
 
-    # Skip the events, just wait for the result
+    # The await below is the first switch point — producer starts running here
     result = await stream.result()
     print(f"final result: {result}")
 
@@ -217,21 +218,24 @@ async def demo_like_agent():
         for word in ["Hello", " there", "!", " How", " can", " I", " help", "?"]:
             await asyncio.sleep(0.15)  # simulate streaming delay
             assistant_msg["content"] += word
-            stream.push({
-                "type": "message_update",
-                "delta_type": "text_delta",
-                "delta": word,
-            })
+            stream.push(
+                {
+                    "type": "message_update",
+                    "delta_type": "text_delta",
+                    "delta": word,
+                }
+            )
 
         all_messages.append(assistant_msg)
         stream.push({"type": "message_end", "message": assistant_msg})
         stream.push({"type": "agent_end", "messages": all_messages})
         stream.end(all_messages)
 
-    # Start the loop as a background task
-    asyncio.create_task(fake_agent_loop())
+    asyncio.create_task(fake_agent_loop())  # schedules loop, doesn't run it yet
+    print("(task scheduled, producer hasn't run yet)")
 
     # Consume events — just like a real CLI would
+    # The first `await queue.get()` inside __aiter__ is where the producer starts running
     async for event in stream:
         if event["type"] == "message_update" and event["delta_type"] == "text_delta":
             print(event["delta"], end="", flush=True)
@@ -250,9 +254,9 @@ async def run_all():
         ("like agent", demo_like_agent),
     ]
     for name, fn in demos:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"  {name}")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
         await fn()
 
 

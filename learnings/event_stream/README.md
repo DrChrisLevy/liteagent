@@ -353,6 +353,32 @@ asyncio.run(main())
 `yield` inside an `async def` makes it an **async generator**. Each `yield`
 pauses and gives a value to whoever is iterating.
 
+### Why `async for` instead of just `for` with `await` inside?
+
+Because the **iteration itself** needs to await — getting the next value might
+require waiting (for a network response, a queue item, etc.):
+
+```python
+# Regular for: getting the next item is instant (it's already in memory)
+for item in [1, 2, 3]:
+    await do_something(item)    # body can await, but next() is instant
+
+# Async for: getting the next item requires waiting
+async for event in stream:     # __anext__() awaits — waits for the next event to arrive
+    print(event)               # body runs once the item arrives
+
+# What async for is actually doing (syntactic sugar for):
+while True:
+    try:
+        event = await stream.__anext__()  # wait for next item to arrive
+    except StopAsyncIteration:
+        break
+    print(event)
+```
+
+`async for` is essentially the consumer pattern in nice syntax. It sits there
+waiting for the producer to push the next item, processes it, waits again.
+
 On its own, `async for` behaves just like a regular loop — one iteration
 after another, in order. The async part only matters when other coroutines
 are running concurrently:
@@ -431,20 +457,3 @@ The consumer iterates the stream. They run concurrently — the producer
 pushes events whenever it has them, and the consumer processes them
 whenever it's ready. The queue bridges the gap.
 
----
-
-## Quick reference
-
-```python
-# What you await:
-await network_call()          # waiting for external server
-await db.query(sql)           # waiting for database
-await asyncio.sleep(n)        # waiting for timer
-await queue.get()             # waiting for someone to put something in
-await future                  # waiting for someone to set the result
-
-# What you DON'T await:
-name = user["name"]           # instant, no waiting
-x = 1 + 2                    # instant
-queue.put_nowait(item)        # instant (just shoves it in)
-```
