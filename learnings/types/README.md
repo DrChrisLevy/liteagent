@@ -345,9 +345,16 @@ class AgentState:
 
 **thinking_level vs reasoning_effort:** `thinking_level` is the user-facing setting on AgentState. It maps to `reasoning_effort` on AgentConfig:
 - `"off"` → `reasoning_effort=None` (don't send to litellm)
-- `"low"` / `"medium"` / `"high"` → passed to litellm's `reasoning_effort` parameter
+- `"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` → passed to litellm's `reasoning_effort` parameter
 
-Pi has more levels (minimal, xhigh) and does explicit budget math. We rely on litellm/providers handling it.
+litellm supports all 6 values and maps them to provider-specific budgets internally:
+- Anthropic: `reasoning_effort="low"` → `thinking={"type": "enabled", "budget_tokens": 1024}`
+- Gemini: maps to `thinkingBudget` or `thinkingLevel` depending on model version
+- OpenAI: `"xhigh"` supported for gpt-5.2+
+- DeepSeek: only supports enabled/disabled, ignores budget
+
+Pi does explicit budget math (1024-16384 tokens per level). We don't need to — litellm
+handles it. No `ThinkingBudgets` type needed.
 
 **Where used:**
 - Agent class maintains it internally
@@ -454,7 +461,8 @@ Consumer calls agent.prompt("Fix the bug")
 |---|---|
 | `Api` / `KnownApi` / `Provider` / `KnownProvider` | litellm handles provider routing |
 | `StreamFn` / `StreamFunction` / `StreamOptions` / `SimpleStreamOptions` | litellm replaces the entire streaming layer |
-| `ThinkingBudgets` | Providers handle reasoning_effort natively now |
+| `ThinkingBudgets` | litellm maps reasoning_effort → provider budgets internally (Anthropic: budget_tokens, Gemini: thinkingBudget). Confirmed in litellm source. |
+| `getApiKey` hook | Dynamic API key resolution per LLM call (e.g., expiring OAuth tokens). litellm has its own key management. Revisit if OAuth rotation needed. |
 | `TextContent` / `ThinkingContent` / `ImageContent` / `ToolCall` | We use litellm's OpenAI-format dicts |
 | `AssistantMessageEvent` (text_start/delta/end, etc.) | Our event system is simpler — just `message_update` with `delta_type` |
 | `Context` (ai layer) | Replaced by our `AgentContext` — same role, Python idioms |
@@ -509,7 +517,7 @@ class AgentConfig:
 class AgentState:
     system_prompt: str
     model: str
-    thinking_level: str
+    thinking_level: str       # "off", "none", "minimal", "low", "medium", "high", "xhigh"
     tools: list[Tool]
     messages: list
     is_streaming: bool

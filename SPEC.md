@@ -215,9 +215,11 @@ class Agent:
 class AgentState:
     system_prompt: str
     model: str
-    thinking_level: str             # "off", "low", "medium", "high"
+    thinking_level: str             # "off", "none", "minimal", "low", "medium", "high", "xhigh"
                                     # "off" = don't send reasoning_effort to litellm
                                     # others passed to litellm's reasoning_effort param directly
+                                    # litellm maps these to provider-specific budgets internally
+                                    # (e.g., Anthropic: "low" → budget_tokens=1024)
     tools: list[Tool]
     messages: list                  # full message history
     is_streaming: bool              # True while loop is running
@@ -601,11 +603,11 @@ class AgentConfig:
     get_follow_up_messages: Callable = None # check for queued messages
 
     # LLM parameters
-    reasoning_effort: str = None            # "low", "medium", "high"
+    reasoning_effort: str = None            # "none", "minimal", "low", "medium", "high", "xhigh"
                                             # None = don't send to litellm (no thinking)
-                                            # litellm passes this to providers who handle budget internally
-                                            # Pi-mono does explicit budget math (1024-16384 tokens per level)
-                                            # but modern providers handle reasoning_effort natively
+                                            # litellm maps these to provider-specific budgets internally
+                                            # (Anthropic → budget_tokens, Gemini → thinkingBudget, etc.)
+                                            # No need for explicit ThinkingBudgets — litellm handles it
     max_tokens: int = None
     temperature: float = None
 
@@ -874,7 +876,8 @@ Features pi has that we intentionally skip, and why:
 | Session ID | Provider-side caching, niche use case | Maybe later |
 | TypeBox schema system | TS-specific, we use Pydantic (Python equivalent) | No |
 | Declaration merging for custom messages | TS-specific pattern | No — Python has simpler extensibility |
-| ThinkingBudgets (per-level token limits) | litellm handles this | Only if litellm doesn't cover it |
+| ThinkingBudgets (per-level token limits) | litellm maps reasoning_effort → provider budgets internally (Anthropic: budget_tokens, Gemini: thinkingBudget) | No — confirmed litellm handles it |
+| getApiKey hook | Dynamic API key resolution per LLM call (e.g., expiring OAuth tokens). litellm has its own key management for now | Maybe later if OAuth rotation needed |
 | Built-in provider implementations | litellm replaces all 6,800 lines | No |
 | TUI / Web UI | Consumer's problem | No |
 | Built-in tools | Consumer's problem | No |
