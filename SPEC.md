@@ -400,6 +400,9 @@ raw parsed args are passed through — same as pi's browser fallback behavior.
 
 ## Dual Loop Architecture
 
+> **Note:** Pseudocode below omits optional-hook guards (`if config.hook:`) and
+> `maybe_async()` wrappers for readability. The implementation will handle these.
+
 ```python
 # Entry points — emit agent_start, then delegate to run_loop
 # (In pi-mono these are agentLoop() and agentLoopContinue())
@@ -469,15 +472,23 @@ async def run_loop(context, new_messages, config, signal, stream) -> list:
 ```python
 async def stream_llm_response(context, config, stream, signal):
     # Hook: transform context before sending (compaction, pruning)
-    messages = await config.transform_context(context.messages)
+    messages = context.messages
+    if config.transform_context:
+        messages = await config.transform_context(messages)
 
     # Hook: convert to LLM format (filter out UI-only message types)
     llm_messages = config.convert_to_llm(messages)
 
+    # Build tool schemas from context.tools for litellm
+    tool_schemas = [
+        {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+        for t in (context.tools or [])
+    ] or None  # None if no tools (don't send empty list)
+
     response = await litellm.acompletion(
         model=config.model,
         messages=llm_messages,
-        tools=config.tool_schemas,          # list of {"type": "function", "function": {"name", "description", "parameters"}}
+        tools=tool_schemas,
         stream=True,
         stream_options={"include_usage": True},  # required to get usage on final streaming chunk
         reasoning_effort=config.reasoning_effort,
@@ -548,7 +559,30 @@ message types (custom, UI-only); standard `user`, `assistant`, and `tool` messag
 
 ---
 
-## Config (Hook Points)
+## AgentContext (loop state)
+
+The data snapshot the loop operates on. Created once at the start of each run.
+Same as pi's `AgentContext` — separates **state** (what the loop works with)
+from **behavior** (how the loop works, i.e. config/hooks).
+
+```python
+@dataclass
+class AgentContext:
+    system_prompt: str                  # system prompt for LLM — loop reads, never mutates
+    messages: list                      # conversation history — loop APPENDS new messages here
+    tools: list[Tool] | None = None    # available tools — loop reads, never mutates
+```
+
+`system_prompt` and `tools` are read-only during the run. `messages` is the one field the
+loop mutates — it appends assistant messages and tool result messages as the run progresses.
+
+The Agent class snapshots its current state into a context at the start of each `prompt()` /
+`continue_run()` call. The loop then works exclusively with this snapshot. Even if
+`agent.set_tools()` is called externally, the running loop won't see it.
+
+---
+
+## AgentConfig (loop behavior)
 
 ```python
 @dataclass
