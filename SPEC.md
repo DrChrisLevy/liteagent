@@ -151,6 +151,7 @@ class Agent:
 
         Special case when last message is assistant (pi edge case):
         1. Check steering queue first — if messages, run with those
+           (skip initial steering poll in run_loop to avoid double-check)
         2. Else check follow-up queue — if messages, run with those
         3. Else throw (can't continue from assistant without new input)
         """
@@ -422,6 +423,7 @@ def agent_loop(messages, context, config, signal) -> EventStream:
 # The engine — no agent lifecycle events, only turn-level
 async def run_loop(context, new_messages, config, signal, stream) -> list:
     pending_messages = await config.get_steering_messages()
+    first_turn = True
 
     # OUTER LOOP: handles follow-up messages after agent settles
     while True:
@@ -429,13 +431,18 @@ async def run_loop(context, new_messages, config, signal, stream) -> list:
 
         # INNER LOOP: LLM calls + tool execution + steering
         while has_tool_calls or pending_messages:
+            if not first_turn:
+                stream.push({"type": "turn_start"})  # skip on first — already emitted by entry point
+            first_turn = False
+
             # 1. Inject pending messages into context
             # 2. Stream LLM response → returns assistant_msg, appended to context + new_messages
             # 3. If error/aborted: push turn_end, return new_messages
             # 4. Execute tools sequentially (check steering after each)
+            #    - execute_tool_calls returns tool_results AND any steering messages found
             #    - Skipped tools get synthetic error results to keep tool call/result pairing balanced
             # 5. Push turn_end
-            # 6. Check steering queue → set pending_messages
+            # 6. Use steering from execute_tool_calls first, else poll config.get_steering_messages
 
         # Agent would stop — check for queued follow-ups
         follow_ups = await config.get_follow_up_messages()
