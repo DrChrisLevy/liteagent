@@ -466,7 +466,7 @@ async def test_skip_tool_call():
         "message_end",
     ]
     assert events[0]["tool_name"] == "bash"
-    assert events[0]["args"] == '{"cmd": "ls"}'
+    assert events[0]["args"] == {"cmd": "ls"}
     assert events[1]["is_error"] is True
     assert msg["is_error"] is True
     assert "Skipped" in msg["content"][0]["text"]
@@ -556,7 +556,7 @@ async def test_execute_on_update():
     assert len(updates) == 1
     assert updates[0]["tool_name"] == "streamer"
     assert updates[0]["args"] == {"x": 1}
-    assert updates[0]["partial"].content[0]["text"] == "partial"
+    assert updates[0]["partial"]["content"][0]["text"] == "partial"
 
 
 async def test_execute_invalid_json_args():
@@ -1484,7 +1484,7 @@ async def test_tool_execution(model):
     tool_ends = [e for e in events if e["type"] == "tool_execution_end"]
     assert not tool_ends[0]["is_error"]
     assert any(
-        "hello world" in b.get("text", "") for b in tool_ends[0]["result"].content
+        "hello world" in b.get("text", "") for b in tool_ends[0]["result"]["content"]
     )
 
     # Final assistant response after tool
@@ -1533,7 +1533,7 @@ async def test_multimodal_spike_detection(model):
             event["type"] == "tool_execution_end"
             and event["tool_name"] == "generate_chart"
         ):
-            spike_info = event["result"].details
+            spike_info = event["result"]["details"]
 
     assert spike_info.get("spike_month"), (
         f"No spike info captured. Events: {event_types(events_t1)}"
@@ -1566,8 +1566,8 @@ async def test_multimodal_spike_detection(model):
             and event.get("delta_type") == "text_delta"
         ):
             delta = event["delta"]
-            if delta.content:
-                answer_text += delta.content
+            if delta.get("content"):
+                answer_text += delta["content"]
 
     # Check LLM identified the spike month (Jan/Feb/Mar/Apr/May/Jun)
     spike_month = spike_info["spike_month"].lower()  # e.g. "Mar"
@@ -1801,3 +1801,111 @@ async def test_abort_mid_stream_live():
     # Stream should have been interrupted
     assert signal.is_set()
     assert chunk_count >= 3
+
+
+# ── Group 8: Bug fix regression tests ──────────────────────────────────────
+
+
+async def test_agent_loop_does_not_mutate_context_object(mock_llm):
+    """agent_loop should not reassign ctx.messages — use local copy instead."""
+    mock_llm([make_chunk(make_delta(content="hi"))], make_final(content="hi"))
+    original_messages = [{"role": "system", "content": "old"}]
+    ctx = make_context(messages=original_messages)
+    user_msg = {"role": "user", "content": "hello", "timestamp": 0}
+    stream = agent_loop([user_msg], ctx, make_config())
+    await collect_events(stream)
+
+    assert ctx.messages is original_messages
+
+
+async def test_skip_tool_call_args_are_parsed_dict():
+    """_skip_tool_call should parse JSON string args to dict."""
+    stream = EventStream()
+    tc = {"id": "call_0", "function": {"name": "bash", "arguments": '{"cmd": "ls"}'}}
+    _skip_tool_call(tc, stream)
+    stream.end()
+    events = await collect_events(stream)
+
+    assert isinstance(events[0]["args"], dict)
+    assert events[0]["args"] == {"cmd": "ls"}
+
+
+async def test_safety_net_error_message_has_all_keys(monkeypatch):
+    """Safety net error_msg must include tool_calls, thinking_blocks, reasoning_content."""
+
+    async def explode(*args, **kwargs):
+        raise TypeError("internal bug")
+
+    monkeypatch.setattr("py_pi_agent.loop.run_loop", explode)
+    ctx = make_context()
+    user_msg = {"role": "user", "content": "hi", "timestamp": 0}
+    stream = agent_loop([user_msg], ctx, make_config())
+    events = await collect_events(stream)
+
+    agent_end = next(e for e in events if e["type"] == "agent_end")
+    error_msg = agent_end["messages"][0]
+    assert "tool_calls" in error_msg and error_msg["tool_calls"] is None
+    assert "thinking_blocks" in error_msg and error_msg["thinking_blocks"] is None
+    assert "reasoning_content" in error_msg and error_msg["reasoning_content"] is None
+
+
+async def test_cancelled_error_ends_stream(monkeypatch):
+    """CancelledError must not prevent stream.end() — result must resolve."""
+
+    async def raise_cancelled(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("py_pi_agent.loop.run_loop", raise_cancelled)
+    ctx = make_context()
+    user_msg = {"role": "user", "content": "hi", "timestamp": 0}
+    stream = agent_loop([user_msg], ctx, make_config())
+
+    try:
+        await asyncio.wait_for(stream.result(), timeout=2.0)
+    except asyncio.TimeoutError:
+        pytest.fail(
+            "stream.result() hung after CancelledError — stream.end() was never called"
+        )
+
+
+async def test_events_are_json_serializable(mock_llm_seq):
+    """All events emitted by the loop must be JSON-serializable with raw json.dumps."""
+    tc_raw = [
+        {"id": "call_0", "function": {"name": "echo", "arguments": '{"message":"hi"}'}}
+    ]
+    mock_llm_seq(
+        [
+            (
+                [
+                    make_chunk(
+                        make_delta(
+                            tool_calls=[make_tc_delta(0, id="call_0", name="echo")]
+                        )
+                    ),
+                    make_chunk(
+                        make_delta(
+                            tool_calls=[make_tc_delta(0, arguments='{"message":"hi"}')]
+                        )
+                    ),
+                ],
+                make_final(tool_calls_raw=tc_raw, finish_reason="tool_calls"),
+            ),
+            (
+                [make_chunk(make_delta(content="Done"))],
+                make_final(content="Done"),
+            ),
+        ]
+    )
+    ctx = make_context(
+        messages=[{"role": "user", "content": "echo hi"}],
+        tools=[_simple_tool("echo", echo_exec)],
+    )
+    stream = EventStream()
+    await run_loop(ctx, [], make_config(), None, stream)
+    events = await collect_events(stream)
+
+    for event in events:
+        try:
+            json.dumps(event)
+        except (TypeError, ValueError) as e:
+            pytest.fail(f"Event type '{event['type']}' not JSON-serializable: {e}")

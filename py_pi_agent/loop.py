@@ -17,7 +17,7 @@ import time
 import litellm
 
 from .stream import EventStream
-from .types import ToolResult
+from .types import AgentContext, ToolResult
 
 # Auto-fix provider message format issues:
 # - inserts placeholder user messages for alternating roles (Anthropic, Bedrock)
@@ -91,6 +91,11 @@ def _skip_tool_call(tool_call, stream):
     tc_id = tool_call["id"]
     tc_name = tool_call["function"]["name"]
     tc_args = tool_call["function"]["arguments"]
+    if isinstance(tc_args, str):
+        try:
+            tc_args = json.loads(tc_args)
+        except (json.JSONDecodeError, TypeError):
+            pass
     result = ToolResult(
         content=[{"type": "text", "text": "Skipped due to queued user message."}],
         details={},
@@ -109,7 +114,7 @@ def _skip_tool_call(tool_call, stream):
             "type": "tool_execution_end",
             "tool_call_id": tc_id,
             "tool_name": tc_name,
-            "result": result,
+            "result": {"content": result.content, "details": result.details},
             "is_error": True,
         }
     )
@@ -176,7 +181,10 @@ async def execute_tool_calls(
                             "tool_call_id": call_id,
                             "tool_name": name,
                             "args": args,
-                            "partial": partial,
+                            "partial": {
+                                "content": partial.content,
+                                "details": partial.details,
+                            },
                         }
                     )
 
@@ -194,7 +202,7 @@ async def execute_tool_calls(
                 "type": "tool_execution_end",
                 "tool_call_id": tc_id,
                 "tool_name": tc_name,
-                "result": result,
+                "result": {"content": result.content, "details": result.details},
                 "is_error": is_error,
             }
         )
@@ -313,7 +321,7 @@ async def stream_llm_response(context, config, signal, stream):
                     {
                         "type": "message_update",
                         "message": {**partial},
-                        "delta": delta,
+                        "delta": {"content": delta_content},
                         "delta_type": "text_delta",
                     }
                 )
@@ -326,7 +334,7 @@ async def stream_llm_response(context, config, signal, stream):
                     {
                         "type": "message_update",
                         "message": {**partial},
-                        "delta": delta,
+                        "delta": {"reasoning_content": delta_rc},
                         "delta_type": "thinking_delta",
                     }
                 )
@@ -339,7 +347,7 @@ async def stream_llm_response(context, config, signal, stream):
                         {
                             "type": "message_update",
                             "message": {**partial},
-                            "delta": delta,
+                            "delta": {"thinking_blocks": delta_tb},
                             "delta_type": "thinking_delta",
                         }
                     )
@@ -376,11 +384,26 @@ async def stream_llm_response(context, config, signal, stream):
                     }
                     for k in sorted(tool_calls_acc)
                 ]
+                # Convert tool call deltas to plain dicts
+                tc_delta_dicts = []
+                for tc_d in delta_tc:
+                    d = {"index": tc_d.index}
+                    if tc_d.id:
+                        d["id"] = tc_d.id
+                    if tc_d.function:
+                        func = {}
+                        if tc_d.function.name:
+                            func["name"] = tc_d.function.name
+                        if tc_d.function.arguments:
+                            func["arguments"] = tc_d.function.arguments
+                        if func:
+                            d["function"] = func
+                    tc_delta_dicts.append(d)
                 stream.push(
                     {
                         "type": "message_update",
                         "message": {**partial},
-                        "delta": delta,
+                        "delta": {"tool_calls": tc_delta_dicts},
                         "delta_type": "tool_call_delta",
                     }
                 )
@@ -564,8 +587,11 @@ def agent_loop(prompts, context, config, signal=None):
     async def _run():
         try:
             new_messages = list(prompts)
-            context.messages = list(context.messages)
-            context.messages.extend(prompts)
+            local_ctx = AgentContext(
+                system_prompt=context.system_prompt,
+                messages=list(context.messages) + list(prompts),
+                tools=context.tools,
+            )
 
             stream.push({"type": "agent_start"})
             stream.push({"type": "turn_start"})
@@ -573,12 +599,15 @@ def agent_loop(prompts, context, config, signal=None):
                 stream.push({"type": "message_start", "message": msg})
                 stream.push({"type": "message_end", "message": msg})
 
-            await run_loop(context, new_messages, config, signal, stream)
+            await run_loop(local_ctx, new_messages, config, signal, stream)
         except Exception as e:
             # Safety net — ensure stream always ends
             error_msg = {
                 "role": "assistant",
                 "content": None,
+                "tool_calls": None,
+                "thinking_blocks": None,
+                "reasoning_content": None,
                 "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
                 "error_message": str(e),
                 "usage": _extract_usage(None),
@@ -586,6 +615,9 @@ def agent_loop(prompts, context, config, signal=None):
             }
             stream.push({"type": "agent_end", "messages": [error_msg]})
             stream.end([error_msg])
+        finally:
+            if not stream._done:
+                stream.end([])
 
     asyncio.get_running_loop().create_task(_run())
     return stream
@@ -603,13 +635,21 @@ def agent_loop_continue(context, config, signal=None):
     async def _run():
         try:
             new_messages = []
+            local_ctx = AgentContext(
+                system_prompt=context.system_prompt,
+                messages=list(context.messages),
+                tools=context.tools,
+            )
             stream.push({"type": "agent_start"})
             stream.push({"type": "turn_start"})
-            await run_loop(context, new_messages, config, signal, stream)
+            await run_loop(local_ctx, new_messages, config, signal, stream)
         except Exception as e:
             error_msg = {
                 "role": "assistant",
                 "content": None,
+                "tool_calls": None,
+                "thinking_blocks": None,
+                "reasoning_content": None,
                 "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
                 "error_message": str(e),
                 "usage": _extract_usage(None),
@@ -617,6 +657,9 @@ def agent_loop_continue(context, config, signal=None):
             }
             stream.push({"type": "agent_end", "messages": [error_msg]})
             stream.end([error_msg])
+        finally:
+            if not stream._done:
+                stream.end([])
 
     asyncio.get_running_loop().create_task(_run())
     return stream
