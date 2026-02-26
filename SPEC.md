@@ -729,29 +729,12 @@ litellm returns two fields:
 
 We store both. litellm handles sending the right format back to each provider.
 
-### Accumulating thinking blocks from streaming
+### Thinking block assembly
 
-**Critical:** litellm's streaming `delta.thinking_blocks` are **partial fragments**, not complete blocks.
-Each chunk contains a fragment with partial thinking text and an empty signature. The final chunk
-for a block carries the cryptographic signature. You must merge these into one block per thinking
-sequence — do NOT store each delta as a separate block.
-
-```python
-# WRONG — creates many blocks with partial text, Anthropic rejects them
-thinking_blocks.extend(delta_blocks)
-
-# RIGHT — merge fragments, finalize when signature arrives
-_cur = {"thinking": "", "signature": ""}
-for b in delta_blocks:
-    _cur["thinking"] += b.get("thinking", "")
-    if b.get("signature"):
-        _cur["signature"] = b["signature"]
-        thinking_blocks.append({"type": "thinking", **_cur})
-        _cur = {"thinking": "", "signature": ""}
-```
-
-Anthropic requires every thinking block to contain non-whitespace thinking text.
-Sending unmerged fragments causes: `"each thinking block must contain non-whitespace thinking"`.
+`litellm.stream_chunk_builder(chunks)` handles merging thinking block fragments
+(partial text + signature finalization) into complete blocks on the finalized
+`ModelResponse`. The loop does not need to merge thinking blocks manually — it
+collects chunks during streaming and delegates assembly to `stream_chunk_builder`.
 
 ```python
 litellm.modify_params = True
