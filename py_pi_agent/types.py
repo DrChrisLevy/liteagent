@@ -52,9 +52,7 @@ class AgentConfig:
     get_follow_up_messages: Callable = None  # check for queued messages
 
     # LLM parameters
-    reasoning_effort: str = (
-        None  # "none"/"minimal"/"low"/"medium"/"high"/"xhigh" or None
-    )
+    reasoning_effort: str = None  # "minimal"/"low"/"medium"/"high"/"xhigh" or None
     max_tokens: int = None
     temperature: float = None
 
@@ -68,7 +66,7 @@ class AgentState:
 
     system_prompt: str
     model: str
-    thinking_level: str  # "off", "none", "minimal", "low", "medium", "high", "xhigh"
+    thinking_level: str  # "off", "minimal", "low", "medium", "high", "xhigh"
     tools: list[Tool] = field(default_factory=list)
     messages: list = field(default_factory=list)
     is_streaming: bool = False

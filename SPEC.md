@@ -219,7 +219,7 @@ class Agent:
 class AgentState:
     system_prompt: str
     model: str
-    thinking_level: str             # "off", "none", "minimal", "low", "medium", "high", "xhigh"
+    thinking_level: str             # "off", "minimal", "low", "medium", "high", "xhigh"
                                     # "off" = don't send reasoning_effort to litellm
                                     # others passed to litellm's reasoning_effort param directly
                                     # litellm maps these to provider-specific budgets internally
@@ -292,7 +292,7 @@ agent.follow_up_mode = "one-at-a-time"
 
 # Tool execution lifecycle
 {"type": "tool_execution_start", "tool_call_id": ..., "tool_name": ..., "args": ...}
-{"type": "tool_execution_update", "tool_call_id": ..., "tool_name": ..., "partial": ...}
+{"type": "tool_execution_update", "tool_call_id": ..., "tool_name": ..., "args": ..., "partial": ...}
 {"type": "tool_execution_end", "tool_call_id": ..., "tool_name": ..., "result": ..., "is_error": bool}
 ```
 
@@ -619,7 +619,7 @@ class AgentConfig:
     get_follow_up_messages: Callable = None # check for queued messages (typically async)
 
     # LLM parameters
-    reasoning_effort: str = None            # "none", "minimal", "low", "medium", "high", "xhigh"
+    reasoning_effort: str = None            # "minimal", "low", "medium", "high", "xhigh"
                                             # None = don't send to litellm (no thinking)
                                             # litellm maps these to provider-specific budgets internally
                                             # (Anthropic → budget_tokens, Gemini → thinkingBudget, etc.)

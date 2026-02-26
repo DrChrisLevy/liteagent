@@ -73,17 +73,15 @@ def _validate_tool_args(tool, args_str):
 
 
 def _build_tool_result_message(tool_call_id, tool_name, result, is_error):
-    msg = {
+    return {
         "role": "tool",
         "tool_call_id": tool_call_id,
         "name": tool_name,
         "content": result.content,
+        "details": result.details or {},
         "is_error": is_error,
         "timestamp": _now_ms(),
     }
-    if result.details:
-        msg["details"] = result.details
-    return msg
 
 
 # ── Skip Tool Call ─────────────────────────────────────────────────────────
@@ -94,7 +92,8 @@ def _skip_tool_call(tool_call, stream):
     tc_name = tool_call["function"]["name"]
     tc_args = tool_call["function"]["arguments"]
     result = ToolResult(
-        content=[{"type": "text", "text": "Skipped due to queued user message."}]
+        content=[{"type": "text", "text": "Skipped due to queued user message."}],
+        details={},
     )
 
     stream.push(
@@ -169,13 +168,14 @@ async def execute_tool_calls(
             validated_args = _validate_tool_args(tool, raw_args)
 
             # Closure factory — captures correct tc_id/tc_name per iteration
-            def _make_on_update(call_id, name):
+            def _make_on_update(call_id, name, args):
                 def on_update(partial):
                     stream.push(
                         {
                             "type": "tool_execution_update",
                             "tool_call_id": call_id,
                             "tool_name": name,
+                            "args": args,
                             "partial": partial,
                         }
                     )
@@ -183,7 +183,7 @@ async def execute_tool_calls(
                 return on_update
 
             result = await tool.execute(
-                tc_id, validated_args, signal, _make_on_update(tc_id, tc_name)
+                tc_id, validated_args, signal, _make_on_update(tc_id, tc_name, raw_args)
             )
         except Exception as e:
             result = ToolResult(content=[{"type": "text", "text": str(e)}])
@@ -564,6 +564,7 @@ def agent_loop(prompts, context, config, signal=None):
     async def _run():
         try:
             new_messages = list(prompts)
+            context.messages = list(context.messages)
             context.messages.extend(prompts)
 
             stream.push({"type": "agent_start"})
