@@ -183,7 +183,7 @@ intermediate snapshots that become `tool_execution_update` events.
 
 ## 4. AgentContext
 
-**What:** The data snapshot the loop operates on. Created once at the start of each run.
+**What:** The data snapshot the loop operates on. Created once per `prompt()` or `continue_run()` call — the entire dual loop (all inner + outer iterations) shares the same context.
 
 ```python
 @dataclass
@@ -364,7 +364,8 @@ handles it. No `ThinkingBudgets` type needed.
 ### set_tools and dynamic capabilities
 
 The Agent class has `set_tools()` (and `set_model()`, `set_system_prompt()`, etc.) to
-reconfigure between runs. Can't be called mid-run (blocked by `is_streaming` guard).
+reconfigure between `prompt()` / `continue_run()` calls. Can't be called while a
+`prompt()` or `continue_run()` is active (blocked by `is_streaming` guard).
 
 Pi's coding agent uses this extensively — it has a **tool registry** (all discovered tools)
 and an **active subset**. Extensions dynamically toggle tools on/off:
