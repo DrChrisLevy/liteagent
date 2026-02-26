@@ -94,7 +94,7 @@ class EventStream:
         """Consumer iterates: async for event in stream: ..."""
 ```
 
-Built on `asyncio.Queue`. Backpressure built in (if consumer is slow, events queue up).
+Built on `asyncio.Queue`. Events buffer in an unbounded queue if consumer is slow.
 
 ### Usage from any framework
 
@@ -120,9 +120,8 @@ async for event in stream:
 # CLI (rich/textual)
 async for event in stream:
     if event["type"] == "message_update":
-        delta = event["delta"]
-        if delta["type"] == "text_delta":
-            console.print(delta["text"], end="")
+        if event["delta_type"] == "text_delta":
+            console.print(event["delta"]["content"], end="")
 ```
 
 ---
@@ -419,13 +418,17 @@ def agent_loop(messages, context, config, signal) -> EventStream:
     stream = EventStream()
     async def run():
         new_messages = list(messages)
-        context.messages.extend(messages)
+        local_ctx = AgentContext(                         # shallow copy
+            system_prompt=context.system_prompt,
+            messages=list(context.messages) + list(messages),
+            tools=context.tools,
+        )
         stream.push({"type": "agent_start"})
         stream.push({"type": "turn_start"})
         for m in messages:
             stream.push({"type": "message_start", "message": m})
             stream.push({"type": "message_end", "message": m})
-        await run_loop(context, new_messages, config, signal, stream)
+        await run_loop(local_ctx, new_messages, config, signal, stream)
     asyncio.create_task(run())
     return stream
 
@@ -483,7 +486,7 @@ async def stream_llm_response(context, config, stream, signal):
     # Hook: transform context before sending (compaction, pruning)
     messages = context.messages
     if config.transform_context:
-        messages = await config.transform_context(messages)
+        messages = await config.transform_context(messages, signal)
 
     # Hook: convert to LLM format (filter out UI-only message types)
     llm_messages = config.convert_to_llm(messages)
@@ -679,7 +682,7 @@ On unhandled exceptions, the Agent class creates a synthetic assistant message:
 ```python
 error_msg = {
     "role": "assistant",
-    "content": "",
+    "content": None,
     "stop_reason": "aborted" if signal.is_set() else "error",
     "error_message": str(exception),
     "usage": {},  # zeroed out
