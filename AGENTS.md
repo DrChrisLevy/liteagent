@@ -55,9 +55,11 @@ Run `./dev lint` before committing.
 
 ## Testing
 
-- Live API calls encouraged — less mocking, more real testing
-- Fast tests run by default, slow tests (`@pytest.mark.slow`) need `-m slow`
-- Test runner: `tests/runner.py`
+- Fast tests by default, slow tests (`@pytest.mark.slow`) need `-m slow`
+- **Pure Python logic** (helpers, tool execution, skip logic): fast tests, no mocks
+- **Control flow** (steering, follow-ups, error exits): fast tests, thin litellm mock
+- **Anything through litellm** (chunks, usage, stop reasons, thinking): live slow tests
+- Don't mock what you can test live. Mocks break silently when litellm changes.
 - Target models (must pass all five):
   - `anthropic/claude-opus-4-6`
   - `anthropic/claude-sonnet-4-6`
