@@ -622,7 +622,7 @@ class AgentConfig:
     temperature: float = None
 
     # Retry behavior — passed to litellm, not implemented by the loop
-    max_retry_delay_ms: int = 60000
+    num_retries: int = None
 ```
 
 ---

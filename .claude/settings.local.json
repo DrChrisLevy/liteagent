@@ -43,7 +43,9 @@
       "WebFetch(domain:docs.litellm.ai)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebSearch",
-      "WebFetch(domain:ai.pydantic.dev)"
+      "WebFetch(domain:ai.pydantic.dev)",
+      "WebFetch(domain:mariozechner.at)",
+      "WebFetch(domain:lucumr.pocoo.org)"
     ],
     "deny": [
       "Bash(git push --force:*)",

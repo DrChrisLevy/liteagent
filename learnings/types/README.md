@@ -227,7 +227,7 @@ class AgentConfig:
     reasoning_effort: str = None             # "low"/"medium"/"high" or None
     max_tokens: int = None
     temperature: float = None
-    max_retry_delay_ms: int = 60000
+    num_retries: int = None
 ```
 
 **Pi equivalent:** `AgentLoopConfig` in `agent/src/types.ts`.
@@ -512,7 +512,7 @@ class AgentConfig:
     reasoning_effort: str = None
     max_tokens: int = None
     temperature: float = None
-    max_retry_delay_ms: int = 60000
+    num_retries: int = None
 
 @dataclass
 class AgentState:
