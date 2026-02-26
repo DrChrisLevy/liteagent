@@ -518,15 +518,19 @@ async def stream_llm_response(context, config, stream, signal):
             stream.push({"type": "message_update", "message": partial_msg,
                          "delta": delta, "delta_type": "tool_call_delta"})
 
-    # Build finalized assistant message from litellm response
-    # This is the canonical internal format — stored in context, emitted in events
-    assistant_msg = build_assistant_message(response, full_content, tool_calls, reasoning)
+    # Build finalized assistant message via litellm.stream_chunk_builder().
+    # Chunks collected during streaming → stream_chunk_builder assembles the
+    # complete ModelResponse (content, tool_calls, thinking_blocks, usage, etc.)
+    # This is Pi's equivalent of await response.result().
+    final = litellm.stream_chunk_builder(chunks)
+    assistant_msg = build_assistant_message(final)
     context.messages.append(assistant_msg)
 ```
 
 ### Canonical Assistant Message Shape
 
-Built from the finalized litellm response (not reassembled deltas):
+Built from `litellm.stream_chunk_builder(chunks)` — the finalized `ModelResponse`
+assembled from collected streaming chunks (equivalent to Pi's `response.result()`):
 
 ```python
 {
@@ -550,11 +554,12 @@ Built from the finalized litellm response (not reassembled deltas):
 }
 ```
 
-This is our internal message format, assembled from litellm's response objects:
-- `content`, `tool_calls`, `reasoning_content`, `thinking_blocks` come from `response.choices[0].message` (Message class)
-- `stop_reason` comes from `response.choices[0].finish_reason` (mapped by litellm: Anthropic "tool_use" → "tool_calls", "end_turn" → "stop")
-- `usage` comes from `response.usage` (Usage class: `prompt_tokens`, `completion_tokens`, `total_tokens`, plus `prompt_tokens_details.cached_tokens` for cache reads)
-- `error` and `aborted` stop reasons are set by our loop, not litellm
+This is our internal message format, built from the finalized `ModelResponse` returned by
+`litellm.stream_chunk_builder(chunks)`. During streaming, chunks are collected in a list.
+After streaming completes, `stream_chunk_builder` assembles the complete response:
+- `content`, `tool_calls`, `reasoning_content`, `thinking_blocks` come from `final.choices[0].message`
+- `stop_reason` comes from `final.choices[0].finish_reason` (mapped by litellm: Anthropic "tool_use" → "tool_calls", "end_turn" → "stop"), or "aborted"/"error" set by our loop
+- `usage` comes from `final.usage` (requires `stream_options={"include_usage": True}` on the original call)
 
 The loop reads `tool_calls` to decide whether to continue. Thinking fields are preserved
 for future messages (Anthropic requires them back).

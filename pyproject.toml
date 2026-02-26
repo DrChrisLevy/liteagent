@@ -21,3 +21,4 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["slow: real API calls (skip by default, run with -m slow)"]
