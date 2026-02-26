@@ -418,21 +418,20 @@ raw parsed args are passed through — same as pi's browser fallback behavior.
 def agent_loop(messages, context, config, signal) -> EventStream:
     stream = EventStream()
     async def run():
+        new_messages = list(messages)
+        context.messages.extend(messages)
         stream.push({"type": "agent_start"})
         stream.push({"type": "turn_start"})
         for m in messages:
             stream.push({"type": "message_start", "message": m})
             stream.push({"type": "message_end", "message": m})
-            context.messages.append(m)
-        new_messages = list(messages)
-        new_messages = await run_loop(context, new_messages, config, signal, stream)
-        stream.push({"type": "agent_end", "messages": new_messages})
-        stream.end(new_messages)
+        await run_loop(context, new_messages, config, signal, stream)
     asyncio.create_task(run())
     return stream
 
-# The engine — no agent lifecycle events, only turn-level
-async def run_loop(context, new_messages, config, signal, stream) -> list:
+# The engine — handles ALL termination (agent_end + stream.end).
+# Same as pi-mono's runLoop (agent-loop.ts:104-198).
+async def run_loop(context, new_messages, config, signal, stream):
     pending_messages = await config.get_steering_messages()
     first_turn = True
 
@@ -448,7 +447,7 @@ async def run_loop(context, new_messages, config, signal, stream) -> list:
 
             # 1. Inject pending messages into context
             # 2. Stream LLM response → returns assistant_msg, appended to context + new_messages
-            # 3. If error/aborted: push turn_end, return new_messages
+            # 3. If error/aborted: emit turn_end + agent_end + stream.end, return
             # 4. Execute tools sequentially (check steering after each)
             #    - execute_tool_calls returns tool_results AND any steering messages found
             #    - Skipped tools get synthetic error results to keep tool call/result pairing balanced
@@ -463,7 +462,9 @@ async def run_loop(context, new_messages, config, signal, stream) -> list:
 
         break
 
-    return new_messages
+    # Normal exit
+    stream.push({"type": "agent_end", "messages": new_messages})
+    stream.end(new_messages)
 ```
 
 ### Why two loops?
