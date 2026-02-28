@@ -617,6 +617,7 @@ def agent_loop(prompts, context, config, signal=None):
             stream.end([error_msg])
         finally:
             if not stream._done:
+                stream.push({"type": "agent_end", "messages": []})
                 stream.end([])
 
     asyncio.get_running_loop().create_task(_run())
@@ -659,6 +660,7 @@ def agent_loop_continue(context, config, signal=None):
             stream.end([error_msg])
         finally:
             if not stream._done:
+                stream.push({"type": "agent_end", "messages": []})
                 stream.end([])
 
     asyncio.get_running_loop().create_task(_run())

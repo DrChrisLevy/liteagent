@@ -1853,7 +1853,7 @@ async def test_safety_net_error_message_has_all_keys(monkeypatch):
 
 
 async def test_cancelled_error_ends_stream(monkeypatch):
-    """CancelledError must not prevent stream.end() — result must resolve."""
+    """CancelledError must not prevent stream.end() — agent_end + result must resolve."""
 
     async def raise_cancelled(*args, **kwargs):
         raise asyncio.CancelledError()
@@ -1864,11 +1864,11 @@ async def test_cancelled_error_ends_stream(monkeypatch):
     stream = agent_loop([user_msg], ctx, make_config())
 
     try:
-        await asyncio.wait_for(stream.result(), timeout=2.0)
+        events = await asyncio.wait_for(collect_events(stream), timeout=2.0)
     except asyncio.TimeoutError:
-        pytest.fail(
-            "stream.result() hung after CancelledError — stream.end() was never called"
-        )
+        pytest.fail("stream hung after CancelledError — stream.end() was never called")
+
+    assert "agent_end" in event_types(events)
 
 
 async def test_events_are_json_serializable(mock_llm_seq):
