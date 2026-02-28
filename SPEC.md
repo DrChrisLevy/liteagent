@@ -433,7 +433,8 @@ def agent_loop(messages, context, config, signal) -> EventStream:
     asyncio.create_task(run())
     return stream
 
-# The engine — handles ALL termination (agent_end + stream.end).
+# The engine — handles normal + error termination (agent_end + stream.end).
+# Entry points have a finally fallback for CancelledError / unexpected BaseExceptions.
 # Same as pi-mono's runLoop (agent-loop.ts:104-198).
 async def run_loop(context, new_messages, config, signal, stream):
     pending_messages = await config.get_steering_messages()

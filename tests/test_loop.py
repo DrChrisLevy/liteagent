@@ -1869,6 +1869,12 @@ async def test_cancelled_error_ends_stream(monkeypatch):
         pytest.fail("stream hung after CancelledError — stream.end() was never called")
 
     assert "agent_end" in event_types(events)
+    # Prompt messages must be preserved in agent_end and stream result
+    agent_end = [e for e in events if e["type"] == "agent_end"][0]
+    assert len(agent_end["messages"]) >= 1
+    assert agent_end["messages"][0] is user_msg
+    result = await asyncio.wait_for(stream.result(), timeout=1.0)
+    assert result[0] is user_msg
 
 
 async def test_events_are_json_serializable(mock_llm_seq):

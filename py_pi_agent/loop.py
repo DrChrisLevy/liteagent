@@ -585,8 +585,8 @@ def agent_loop(prompts, context, config, signal=None):
     stream = EventStream()
 
     async def _run():
+        new_messages = list(prompts)
         try:
-            new_messages = list(prompts)
             local_ctx = AgentContext(
                 system_prompt=context.system_prompt,
                 messages=list(context.messages) + list(prompts),
@@ -617,8 +617,8 @@ def agent_loop(prompts, context, config, signal=None):
             stream.end([error_msg])
         finally:
             if not stream._done:
-                stream.push({"type": "agent_end", "messages": []})
-                stream.end([])
+                stream.push({"type": "agent_end", "messages": new_messages})
+                stream.end(new_messages)
 
     asyncio.get_running_loop().create_task(_run())
     return stream
@@ -634,8 +634,8 @@ def agent_loop_continue(context, config, signal=None):
     stream = EventStream()
 
     async def _run():
+        new_messages = []
         try:
-            new_messages = []
             local_ctx = AgentContext(
                 system_prompt=context.system_prompt,
                 messages=list(context.messages),
@@ -660,8 +660,8 @@ def agent_loop_continue(context, config, signal=None):
             stream.end([error_msg])
         finally:
             if not stream._done:
-                stream.push({"type": "agent_end", "messages": []})
-                stream.end([])
+                stream.push({"type": "agent_end", "messages": new_messages})
+                stream.end(new_messages)
 
     asyncio.get_running_loop().create_task(_run())
     return stream
