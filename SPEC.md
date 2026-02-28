@@ -275,16 +275,17 @@ agent.follow_up_mode = "one-at-a-time"
 
 # Streaming deltas (within message_update)
 #
-# The "delta" field contains the raw litellm chunk delta (OpenAI format):
-#   delta.content            — text token from LLM (str or None)
-#   delta.reasoning_content  — thinking/reasoning token (str or None)
-#   delta.thinking_blocks    — Anthropic thinking blocks (list or None, includes signatures)
-#   delta.tool_calls         — tool call fragments (list[ChatCompletionDeltaToolCallChunk] or None)
+# The "delta" field is a plain JSON-serializable dict with only the fields
+# present in this chunk (no litellm objects leak through):
+#   {"content": "token"}                — text delta
+#   {"reasoning_content": "token"}      — thinking/reasoning delta
+#   {"thinking_blocks": [...]}          — Anthropic thinking blocks (includes signatures)
+#   {"tool_calls": [{"index": 0, ...}]} — tool call fragments as dicts
 #
-# We also add a "delta_type" convenience field:
-#   "text_delta"         — delta.content was present
-#   "thinking_delta"     — delta.reasoning_content was present
-#   "tool_call_delta"    — delta.tool_calls was present
+# "delta_type" indicates which kind:
+#   "text_delta"         — delta has "content"
+#   "thinking_delta"     — delta has "reasoning_content" or "thinking_blocks"
+#   "tool_call_delta"    — delta has "tool_calls"
 #
 # Note: deltas are for UI display only. Tool execution uses the finalized
 # assistant message from litellm, not reassembled deltas.
