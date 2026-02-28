@@ -1551,6 +1551,9 @@ async def test_multimodal_spike_detection(model):
         "aborted",
     ), f"Turn 1 failed: {last_assistant}"
 
+    # Carry turn 1 messages into context (agent_loop doesn't mutate caller's context)
+    context.messages.extend(agent_end["messages"])
+
     # Turn 2: ask which month has the spike (LLM must look at image)
     user_msg2 = {
         "role": "user",
