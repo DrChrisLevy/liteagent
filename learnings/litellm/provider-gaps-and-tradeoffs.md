@@ -4,6 +4,20 @@ litellm normalizes the *shape* of LLM responses (everything becomes
 `choices[0].delta.*`) but does not normalize the *semantics*. Downstream code
 must still know where certain fields live per provider.
 
+## Provider boundary principle
+
+`loop.py` is provider-agnostic but boundary-defensive:
+
+- **No provider-specific control flow** — no `if anthropic:` or `if gemini:`
+- **Defensive reads at the litellm boundary** — check multiple locations with
+  `getattr` fallbacks (e.g., `_extract_usage`)
+- **Opaque preservation** — pass through `provider_specific_fields`,
+  `thinking_blocks`, etc. without interpreting them
+- **Request-shape differences go in `convert_to_llm`** — that's the caller's job
+
+If you're interpreting provider-specific semantics in loop.py, that's the smell.
+See also: SPEC.md "Provider boundary principle."
+
 ## Cache tokens (fixed)
 
 litellm preserves two different locations for cache token counts:

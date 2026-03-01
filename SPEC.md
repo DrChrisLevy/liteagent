@@ -49,6 +49,18 @@ py_pi_agent/
 etc.) to normalize streaming, tool calls, and thinking traces across providers. litellm does the same
 thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that.
 
+**Provider boundary principle:** `loop.py` is provider-agnostic but boundary-defensive. No
+provider-specific control flow (`if anthropic:`, `if gemini:`) — but two kinds of leakage are
+acceptable at the litellm boundary:
+
+1. **Defensive reads** when litellm exposes slightly different shapes per provider (e.g.,
+   `_extract_usage` checks both Anthropic's top-level cache fields and OpenAI's nested ones).
+2. **Opaque preservation** of fields litellm gives us that we don't interpret (e.g.,
+   `provider_specific_fields`, `thinking_blocks`, `reasoning_content`).
+
+If you find yourself interpreting provider-specific semantics in the loop, that's the smell.
+Push request-shape differences into `convert_to_llm` — that's the caller's responsibility.
+
 **Why Pydantic (not jsonschema)?** Pi uses AJV (JavaScript JSON Schema validator) with `coerceTypes: true`
 to fix LLM mistakes like sending `"42"` instead of `42`. Python's `jsonschema` library doesn't coerce.
 Pydantic does — it validates AND coerces naturally. It's the Python equivalent of AJV + TypeBox.
