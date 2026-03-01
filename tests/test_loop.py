@@ -395,8 +395,9 @@ async def test_extract_usage_none():
     }
 
 
-async def test_extract_usage_with_cache_details():
-    details = _Obj(cached_tokens=500, cache_creation_tokens=100)
+async def test_extract_usage_openai_cache_details():
+    """OpenAI-style: cached_tokens inside prompt_tokens_details (read only, no creation)."""
+    details = _Obj(cached_tokens=500)
     usage = _Obj(
         prompt_tokens=1000,
         completion_tokens=200,
@@ -406,7 +407,21 @@ async def test_extract_usage_with_cache_details():
     u = _extract_usage(usage)
     assert u["prompt_tokens"] == 1000
     assert u["cache_read_tokens"] == 500
-    assert u["cache_creation_tokens"] == 100
+    assert u["cache_creation_tokens"] == 0
+
+
+async def test_extract_usage_anthropic_cache_tokens():
+    """Anthropic-style: cache tokens as top-level attrs on usage object."""
+    usage = _Obj(
+        prompt_tokens=800,
+        completion_tokens=150,
+        total_tokens=950,
+        cache_read_input_tokens=300,
+        cache_creation_input_tokens=200,
+    )
+    u = _extract_usage(usage)
+    assert u["cache_read_tokens"] == 300
+    assert u["cache_creation_tokens"] == 200
 
 
 async def test_validate_tool_args_no_model():

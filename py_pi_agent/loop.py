@@ -51,16 +51,22 @@ def _extract_usage(usage):
             "cache_creation_tokens": 0,
         }
     details = getattr(usage, "prompt_tokens_details", None)
+    # Anthropic: top-level cache_read_input_tokens / cache_creation_input_tokens
+    # OpenAI: prompt_tokens_details.cached_tokens (read only, no creation)
+    cache_read = (
+        getattr(usage, "cache_read_input_tokens", 0)
+        or (getattr(details, "cached_tokens", 0) or 0 if details else 0)
+        or 0
+    )
+    cache_creation = (
+        getattr(usage, "cache_creation_input_tokens", 0) or 0
+    )
     return {
         "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
         "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
         "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-        "cache_read_tokens": (getattr(details, "cached_tokens", 0) or 0)
-        if details
-        else 0,
-        "cache_creation_tokens": (getattr(details, "cache_creation_tokens", 0) or 0)
-        if details
-        else 0,
+        "cache_read_tokens": cache_read,
+        "cache_creation_tokens": cache_creation,
     }
 
 
