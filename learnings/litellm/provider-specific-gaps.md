@@ -43,13 +43,19 @@ when building the finalized assistant message dict.
 
 | Provider | What's in `provider_specific_fields` | Impact of dropping |
 |---|---|---|
-| **Gemini** | `thought_signatures` — opaque tokens for multi-turn context preservation | litellm auto-injects a dummy signature (`skip_thought_signature_validator`) when the real one is missing. No error. Possible fidelity loss in long multi-turn thinking conversations. |
+| **Gemini** (`gemini-3-flash-preview`, `gemini-3.1-pro-preview`) | `thought_signatures` — opaque tokens for multi-turn context preservation | Non-fatal but real fidelity gap. See details below. |
 | **Anthropic** | Citations, web search results (on responses only) | No impact — Anthropic does NOT read these from previous messages in conversation history. |
 | **OpenAI** | Not used | No impact |
 
-### Why it's safe for now
+### Gemini thought_signatures — nuance
 
-Gemini's transformation code is defensive:
+The dummy signature fallback (`skip_thought_signature_validator`) is **narrower
+than it sounds**. litellm injects it for tool/function-call replay in
+`factory.py`, but for plain assistant text replay it just omits
+`thoughtSignature` if `provider_specific_fields["thought_signatures"]` is
+missing in `transformation.py`.
+
+Both paths are non-fatal — Gemini's transformation code is defensive:
 
 ```python
 provider_specific_fields = assistant_msg.get("provider_specific_fields")
@@ -57,8 +63,16 @@ if provider_specific_fields and isinstance(provider_specific_fields, dict):
     thought_signatures = provider_specific_fields.get("thought_signatures")
 ```
 
-If missing → falls back to dummy signature for Gemini 3+, or `None` for older
-models. Conversations continue without error.
+If missing → no error, conversation continues. But it is a real fidelity loss
+in multi-turn thinking conversations, not "auto-injected everywhere."
+
+### Why it's safe for now
+
+- Not a bug for current target-model stability (all 5 models pass slow tests)
+- Anthropic's request path cares about `thinking_blocks`, not prior
+  `provider_specific_fields` — negligible impact
+- Gemini conversations work without signatures, just with reduced context
+  fidelity
 
 ### Fix when needed
 
