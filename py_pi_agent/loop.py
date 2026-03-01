@@ -458,6 +458,9 @@ async def stream_llm_response(context, config, signal, stream):
                         "name": tc.function.name,
                         "arguments": tc.function.arguments,
                     },
+                    "provider_specific_fields": getattr(
+                        tc, "provider_specific_fields", None
+                    ),
                 }
                 for tc in msg.tool_calls
             ]
@@ -474,6 +477,7 @@ async def stream_llm_response(context, config, signal, stream):
             "tool_calls": tool_calls,
             "thinking_blocks": getattr(msg, "thinking_blocks", None) or None,
             "reasoning_content": getattr(msg, "reasoning_content", None) or None,
+            "provider_specific_fields": getattr(msg, "provider_specific_fields", None),
             "usage": _extract_usage(final.usage),
             "stop_reason": stop_reason,
             "timestamp": _now_ms(),
