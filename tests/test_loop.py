@@ -1975,3 +1975,55 @@ async def test_anthropic_cache_tokens():
         )
 
     assert usage2["cache_read_tokens"] > 0
+
+
+GEMINI_THINKING_MODELS = [
+    "gemini/gemini-3-flash-preview",
+]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", GEMINI_THINKING_MODELS)
+async def test_gemini_provider_specific_fields_preserved(model):
+    """Gemini thought_signatures in provider_specific_fields survive round-trip.
+
+    When Gemini uses thinking + tool calls, litellm returns
+    provider_specific_fields with thought_signatures on the assistant message
+    and/or tool calls. We must preserve these for multi-turn fidelity.
+    """
+    context = AgentContext(
+        system_prompt="Use the echo tool to echo the user's message. Then say Done.",
+        messages=[],
+        tools=[ECHO_TOOL],
+    )
+    config = AgentConfig(
+        model=model,
+        convert_to_llm=make_convert_to_llm(model),
+        reasoning_effort="low",
+    )
+
+    user_msg = {"role": "user", "content": "Echo 'hello'", "timestamp": 0}
+    stream = agent_loop([user_msg], context, config)
+    events = await collect_events(stream)
+
+    # Find assistant messages with tool calls (first turn)
+    assistant_ends = [
+        e
+        for e in events
+        if e["type"] == "message_end" and e["message"].get("role") == "assistant"
+    ]
+    assert len(assistant_ends) >= 1
+
+    # Check message-level and tool-call-level provider_specific_fields
+    first = assistant_ends[0]["message"]
+    msg_psf = first.get("provider_specific_fields")
+    tc_psfs = [
+        tc.get("provider_specific_fields") for tc in (first.get("tool_calls") or [])
+    ]
+
+    has_any = (msg_psf is not None) or any(p is not None for p in tc_psfs)
+    assert has_any, (
+        f"Expected provider_specific_fields on Gemini thinking + tool call response.\n"
+        f"  message-level: {msg_psf}\n"
+        f"  tool-call-level: {tc_psfs}"
+    )
