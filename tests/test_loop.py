@@ -1933,3 +1933,45 @@ async def test_events_are_json_serializable(mock_llm_seq):
             json.dumps(event)
         except (TypeError, ValueError) as e:
             pytest.fail(f"Event type '{event['type']}' not JSON-serializable: {e}")
+
+
+@pytest.mark.slow
+async def test_anthropic_cache_tokens():
+    """Anthropic prompt caching: verify cache tokens are extracted correctly.
+
+    Known issue: litellm folds cache_read_input_tokens into prompt_tokens and
+    zeros out the cache fields (raw Anthropic SDK returns them correctly).
+    This test documents the expected behavior and will start passing once
+    litellm fixes the bug. Until then it's marked xfail.
+    """
+    model = "anthropic/claude-sonnet-4-20250514"
+    # System prompt must be >1024 tokens to trigger auto-caching
+    long_prompt = "You are a helpful assistant.\n" + ("Rule: be concise. " * 300)
+
+    async def _call():
+        context = AgentContext(system_prompt=long_prompt, messages=[])
+        config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+        user_msg = {"role": "user", "content": "Say hi.", "timestamp": 0}
+        stream = agent_loop([user_msg], context, config)
+        events = await collect_events(stream)
+        assistant_ends = [
+            e
+            for e in events
+            if e["type"] == "message_end" and e["message"].get("role") == "assistant"
+        ]
+        assert len(assistant_ends) >= 1
+        return assistant_ends[0]["message"]["usage"]
+
+    # Two calls — first may create or read cache, second definitely reads
+    usage1 = await _call()
+    usage2 = await _call()
+
+    # litellm currently folds cache tokens into prompt_tokens and zeros the
+    # cache-specific fields. When litellm fixes this, remove the xfail.
+    if usage2["cache_read_tokens"] == 0:
+        pytest.xfail(
+            "litellm bug: cache tokens folded into prompt_tokens. "
+            f"usage1={usage1}, usage2={usage2}"
+        )
+
+    assert usage2["cache_read_tokens"] > 0

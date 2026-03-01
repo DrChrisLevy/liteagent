@@ -58,9 +58,7 @@ def _extract_usage(usage):
         or (getattr(details, "cached_tokens", 0) or 0 if details else 0)
         or 0
     )
-    cache_creation = (
-        getattr(usage, "cache_creation_input_tokens", 0) or 0
-    )
+    cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
     return {
         "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
         "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
