@@ -28,58 +28,33 @@ Raw Anthropic SDK:  input=9   cache_read=1809  ← correct
 litellm:            prompt=1818  cache_read=0   ← bug
 ```
 
-## provider_specific_fields (not preserved — known gap)
+## provider_specific_fields (fixed)
 
 `stream_chunk_builder()` preserves `provider_specific_fields` on both the
-message and individual tool calls. Our `stream_llm_response()` drops them
-when building the finalized assistant message dict.
+message and individual tool calls. We now preserve them too at both levels.
+Verified by `test_gemini_provider_specific_fields_preserved`.
 
-### What we drop
+### What's in provider_specific_fields
 
-- **Message level**: `provider_specific_fields`, `annotations`, `audio`, `images`
-- **Tool call level**: `provider_specific_fields` (only keep `id`, `type`, `function`)
-
-### Impact per provider
-
-| Provider | What's in `provider_specific_fields` | Impact of dropping |
-|---|---|---|
-| **Gemini** (`gemini-3-flash-preview`, `gemini-3.1-pro-preview`) | `thought_signatures` — opaque tokens for multi-turn context preservation | Non-fatal but real fidelity gap. See details below. |
-| **Anthropic** | Citations, web search results (on responses only) | No impact — Anthropic does NOT read these from previous messages in conversation history. |
-| **OpenAI** | Not used | No impact |
+| Provider | What's in `provider_specific_fields` |
+|---|---|
+| **Gemini** (`gemini-3-flash-preview`, `gemini-3.1-pro-preview`) | `thought_signatures` — opaque tokens for multi-turn context preservation |
+| **Anthropic** | Citations, web search results (on responses only). Anthropic does NOT read these from previous messages in conversation history. |
+| **OpenAI** | Not used |
 
 ### Gemini thought_signatures — nuance
 
-The dummy signature fallback (`skip_thought_signature_validator`) is **narrower
-than it sounds**. litellm injects it for tool/function-call replay in
+The dummy signature fallback (`skip_thought_signature_validator`) is narrower
+than it sounds. litellm injects it for tool/function-call replay in
 `factory.py`, but for plain assistant text replay it just omits
 `thoughtSignature` if `provider_specific_fields["thought_signatures"]` is
-missing in `transformation.py`.
+missing in `transformation.py`. Dropping them would be non-fatal but would
+lose fidelity in multi-turn thinking conversations.
 
-Both paths are non-fatal — Gemini's transformation code is defensive:
+### Still not preserved
 
-```python
-provider_specific_fields = assistant_msg.get("provider_specific_fields")
-if provider_specific_fields and isinstance(provider_specific_fields, dict):
-    thought_signatures = provider_specific_fields.get("thought_signatures")
-```
-
-If missing → no error, conversation continues. But it is a real fidelity loss
-in multi-turn thinking conversations, not "auto-injected everywhere."
-
-### Why it's safe for now
-
-- Not a bug for current target-model stability (all 5 models pass slow tests)
-- Anthropic's request path cares about `thinking_blocks`, not prior
-  `provider_specific_fields` — negligible impact
-- Gemini conversations work without signatures, just with reduced context
-  fidelity
-
-### Fix when needed
-
-Two small changes in `stream_llm_response()`:
-
-1. Message level: `getattr(msg, "provider_specific_fields", None)`
-2. Tool call level: `getattr(tc, "provider_specific_fields", None)`
+Other litellm message fields we don't carry: `annotations`, `audio`, `images`.
+None of our target models use these today.
 
 ## stream_options
 
