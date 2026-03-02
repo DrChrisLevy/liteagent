@@ -84,13 +84,70 @@ post-hoc only — it operates after all chunks are collected. Our 250-line
 incrementally, for live `message_update` events. The plumbing is correct
 (verified against `streaming_chunk_builder_utils.py`).
 
+## Thinking field inconsistency
+
+litellm promotes thinking to named fields — but inconsistently:
+
+| Provider | Thinking text | Cryptographic signatures |
+|---|---|---|
+| **Anthropic** | `reasoning_content` (string) ✅ | `thinking_blocks` (first-class field with signatures) |
+| **Gemini Pro** | `reasoning_content` (string) ✅ | `provider_specific_fields["thought_signatures"]` (opaque bag) |
+| **Gemini Flash** | `reasoning_content` — only on hard questions, not trivial ones | same as Pro |
+| **GPT-5.2** | **Not surfaced** via Chat Completions API | n/a |
+
+Both Anthropic and Gemini need their signatures round-tripped for multi-turn thinking
+conversations. But Anthropic gets a dedicated `thinking_blocks` field while Gemini's
+equivalent is buried in `provider_specific_fields`. Same concept, different treatment.
+
+This is why we preserve both `thinking_blocks` AND `provider_specific_fields` on every
+assistant message — can't rely on litellm being consistent about where signatures land.
+
+### GPT-5.2 reasoning gap (as of March 2026)
+
+GPT-5.2 is a thinking model but its reasoning text is **not visible** through
+`litellm.acompletion()` (Chat Completions API). Verified:
+
+- `reasoning_effort="high"` is passed correctly (litellm's `gpt_5_transformation.py`
+  lists it as a supported param)
+- GPT-5.2 thinks internally (spends reasoning tokens)
+- But the thinking is hidden — `reasoning_content` is always `None`
+
+OpenAI exposes reasoning summaries via `reasoning.summary = "auto"` in the
+**Responses API**, not Chat Completions. litellm's Chat Completions path doesn't
+set this parameter, so reasoning text is never returned.
+
+To get GPT-5.2 thinking output, you'd need litellm's Responses API path or a
+direct OpenAI SDK call with `reasoning={"effort": "high", "summary": "auto"}`.
+
+### How pi solves this
+
+Pi uses the **Responses API** (not Chat Completions) for all OpenAI reasoning models.
+It sends three things we don't:
+
+```python
+reasoning={"effort": "medium", "summary": "auto"}
+include=["reasoning.encrypted_content"]
+```
+
+- `summary: "auto"` enables reasoning summary text in the response
+- `include: ["reasoning.encrypted_content"]` enables round-tripping the encrypted
+  reasoning back to OpenAI on subsequent turns (like Anthropic's `thinking_blocks`
+  signatures)
+
+Pi stores the full `ResponseReasoningItem` JSON as `thinkingSignature` on the
+thinking block — same pattern as Anthropic/Gemini signatures, just different data.
+
+Our `litellm.acompletion()` path uses Chat Completions which doesn't support any
+of this. A fix would require either litellm adding Responses API support to
+`acompletion`, or us calling the OpenAI Responses API directly for GPT-5 models.
+
 ## What litellm normalizes well
 
 These are safe to depend on across all providers:
 
 - `delta.content` (text)
-- `delta.reasoning_content` (thinking/reasoning)
-- `delta.thinking_blocks` (Anthropic cryptographic signatures)
+- `delta.reasoning_content` (thinking/reasoning — Anthropic and Gemini only, not GPT-5.2 via Chat Completions)
+- `delta.thinking_blocks` (Anthropic cryptographic signatures — not emitted for other providers)
 - `delta.tool_calls` with `.index`, `.id`, `.function.name`, `.function.arguments`
 - `role: "system"` → native system prompt format
 - OpenAI tool schemas → native tool format
