@@ -264,6 +264,122 @@ agent.steering_mode = "one-at-a-time"
 agent.follow_up_mode = "one-at-a-time"
 ```
 
+### Internal `_run_loop()` — how the Agent wires into the loop
+
+The Agent's internal method that connects everything. Same pattern as pi's `_runLoop()` in `agent.ts`.
+
+```python
+async def _run_loop(self, prompts=None):
+    """Internal: create signal, build config, call loop, iterate events to update state."""
+    self._signal = asyncio.Event()  # fresh cancellation signal per run
+    self._state.is_streaming = True
+    self._state.error = None
+    self._running_future = asyncio.get_running_loop().create_future()  # for wait_for_idle()
+
+    try:
+        # Build AgentConfig — wire queues as hooks
+        config = AgentConfig(
+            model=self._state.model,
+            convert_to_llm=self._convert_to_llm,
+            transform_context=self._transform_context,
+            get_steering_messages=self._dequeue_steering,   # returns list or None
+            get_follow_up_messages=self._dequeue_follow_ups,
+            reasoning_effort=None if self._state.thinking_level == "off"
+                             else self._state.thinking_level,
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
+            num_retries=self._num_retries,
+        )
+
+        # Snapshot context
+        context = AgentContext(
+            system_prompt=self._state.system_prompt,
+            messages=list(self._state.messages),  # shallow copy — loop appends to its own copy
+            tools=list(self._state.tools) if self._state.tools else None,
+        )
+
+        # Call the appropriate loop entry point
+        if prompts is not None:
+            stream = agent_loop(prompts, context, config, self._signal)
+        else:
+            stream = agent_loop_continue(context, config, self._signal)
+
+        # Iterate events — update state + publish to subscribers
+        async for event in stream:
+            self._handle_event(event)
+            self._emit(event)
+
+        # After stream ends, update messages from result
+        new_messages = await stream.result()
+        self._state.messages.extend(new_messages)
+
+    except Exception as e:
+        # Unhandled error — create synthetic error message
+        error_msg = { ... }  # see Synthetic Error Messages section
+        self._state.messages.append(error_msg)
+        self._state.error = str(e)
+
+    finally:
+        self._state.is_streaming = False
+        self._state.stream_message = None
+        self._state.pending_tool_calls = set()
+        self._signal = None
+        if not self._running_future.done():
+            self._running_future.set_result(None)  # unblock wait_for_idle()
+```
+
+### Event handling — updating state from events
+
+`_handle_event()` keeps `AgentState` in sync with the running loop:
+
+```python
+def _handle_event(self, event):
+    t = event["type"]
+    if t == "message_start":
+        if event["message"].get("role") == "assistant":
+            self._state.stream_message = event["message"]
+    elif t == "message_update":
+        self._state.stream_message = event["message"]
+    elif t == "message_end":
+        self._state.stream_message = None
+    elif t == "tool_execution_start":
+        self._state.pending_tool_calls.add(event["tool_call_id"])
+    elif t == "tool_execution_end":
+        self._state.pending_tool_calls.discard(event["tool_call_id"])
+```
+
+### Queue dequeuing — respects mode
+
+```python
+def _dequeue_steering(self):
+    if not self._steering_queue:
+        return None
+    if self.steering_mode == "all":
+        msgs = list(self._steering_queue)
+        self._steering_queue.clear()
+        return msgs
+    else:  # one-at-a-time
+        return [self._steering_queue.pop(0)]
+
+# Same pattern for _dequeue_follow_ups
+```
+
+### Partial message handling on abort
+
+Pi carefully checks whether a partial message has real content before appending.
+If the agent is aborted mid-stream, the stream may end with a partial message that has
+only whitespace or empty content. Skip these — don't pollute the message history.
+
+### `convert_to_llm` default
+
+The Agent class provides a default `convert_to_llm` that filters to standard roles:
+```python
+def _default_convert_to_llm(messages):
+    return [m for m in messages if m.get("role") in ("user", "assistant", "tool")]
+```
+Consumers override this for custom message types or provider-specific workarounds
+(e.g., OpenAI multimodal tool results).
+
 ---
 
 ## Event Types
