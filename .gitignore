@@ -12,6 +12,9 @@ build/
 # Virtual environments
 .venv/
 
+# Jupyter
+.ipynb_checkpoints/
+
 # Testing / linting caches
 .pytest_cache/
 .ruff_cache/
