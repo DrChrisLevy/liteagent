@@ -49,6 +49,18 @@ py_pi_agent/
 etc.) to normalize streaming, tool calls, and thinking traces across providers. litellm does the same
 thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that.
 
+**Provider boundary principle:** `loop.py` is provider-agnostic but boundary-defensive. No
+provider-specific control flow (`if anthropic:`, `if gemini:`) — but two kinds of leakage are
+acceptable at the litellm boundary:
+
+1. **Defensive reads** when litellm exposes slightly different shapes per provider (e.g.,
+   `_extract_usage` checks both Anthropic's top-level cache fields and OpenAI's nested ones).
+2. **Opaque preservation** of fields litellm gives us that we don't interpret (e.g.,
+   `provider_specific_fields`, `thinking_blocks`, `reasoning_content`).
+
+If you find yourself interpreting provider-specific semantics in the loop, that's the smell.
+Push request-shape differences into `convert_to_llm` — that's the caller's responsibility.
+
 **Why Pydantic (not jsonschema)?** Pi uses AJV (JavaScript JSON Schema validator) with `coerceTypes: true`
 to fix LLM mistakes like sending `"42"` instead of `42`. Python's `jsonschema` library doesn't coerce.
 Pydantic does — it validates AND coerces naturally. It's the Python equivalent of AJV + TypeBox.
@@ -94,7 +106,7 @@ class EventStream:
         """Consumer iterates: async for event in stream: ..."""
 ```
 
-Built on `asyncio.Queue`. Backpressure built in (if consumer is slow, events queue up).
+Built on `asyncio.Queue`. Events buffer in an unbounded queue if consumer is slow.
 
 ### Usage from any framework
 
@@ -120,9 +132,8 @@ async for event in stream:
 # CLI (rich/textual)
 async for event in stream:
     if event["type"] == "message_update":
-        delta = event["delta"]
-        if delta["type"] == "text_delta":
-            console.print(delta["text"], end="")
+        if event["delta_type"] == "text_delta":
+            console.print(event["delta"]["content"], end="")
 ```
 
 ---
@@ -219,7 +230,7 @@ class Agent:
 class AgentState:
     system_prompt: str
     model: str
-    thinking_level: str             # "off", "none", "minimal", "low", "medium", "high", "xhigh"
+    thinking_level: str             # "off", "minimal", "low", "medium", "high", "xhigh"
                                     # "off" = don't send reasoning_effort to litellm
                                     # others passed to litellm's reasoning_effort param directly
                                     # litellm maps these to provider-specific budgets internally
@@ -253,6 +264,122 @@ agent.steering_mode = "one-at-a-time"
 agent.follow_up_mode = "one-at-a-time"
 ```
 
+### Internal `_run_loop()` — how the Agent wires into the loop
+
+The Agent's internal method that connects everything. Same pattern as pi's `_runLoop()` in `agent.ts`.
+
+```python
+async def _run_loop(self, prompts=None):
+    """Internal: create signal, build config, call loop, iterate events to update state."""
+    self._signal = asyncio.Event()  # fresh cancellation signal per run
+    self._state.is_streaming = True
+    self._state.error = None
+    self._running_future = asyncio.get_running_loop().create_future()  # for wait_for_idle()
+
+    try:
+        # Build AgentConfig — wire queues as hooks
+        config = AgentConfig(
+            model=self._state.model,
+            convert_to_llm=self._convert_to_llm,
+            transform_context=self._transform_context,
+            get_steering_messages=self._dequeue_steering,   # returns list or None
+            get_follow_up_messages=self._dequeue_follow_ups,
+            reasoning_effort=None if self._state.thinking_level == "off"
+                             else self._state.thinking_level,
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
+            num_retries=self._num_retries,
+        )
+
+        # Snapshot context
+        context = AgentContext(
+            system_prompt=self._state.system_prompt,
+            messages=list(self._state.messages),  # shallow copy — loop appends to its own copy
+            tools=list(self._state.tools) if self._state.tools else None,
+        )
+
+        # Call the appropriate loop entry point
+        if prompts is not None:
+            stream = agent_loop(prompts, context, config, self._signal)
+        else:
+            stream = agent_loop_continue(context, config, self._signal)
+
+        # Iterate events — update state + publish to subscribers
+        async for event in stream:
+            self._handle_event(event)
+            self._emit(event)
+
+        # After stream ends, update messages from result
+        new_messages = await stream.result()
+        self._state.messages.extend(new_messages)
+
+    except Exception as e:
+        # Unhandled error — create synthetic error message
+        error_msg = { ... }  # see Synthetic Error Messages section
+        self._state.messages.append(error_msg)
+        self._state.error = str(e)
+
+    finally:
+        self._state.is_streaming = False
+        self._state.stream_message = None
+        self._state.pending_tool_calls = set()
+        self._signal = None
+        if not self._running_future.done():
+            self._running_future.set_result(None)  # unblock wait_for_idle()
+```
+
+### Event handling — updating state from events
+
+`_handle_event()` keeps `AgentState` in sync with the running loop:
+
+```python
+def _handle_event(self, event):
+    t = event["type"]
+    if t == "message_start":
+        if event["message"].get("role") == "assistant":
+            self._state.stream_message = event["message"]
+    elif t == "message_update":
+        self._state.stream_message = event["message"]
+    elif t == "message_end":
+        self._state.stream_message = None
+    elif t == "tool_execution_start":
+        self._state.pending_tool_calls.add(event["tool_call_id"])
+    elif t == "tool_execution_end":
+        self._state.pending_tool_calls.discard(event["tool_call_id"])
+```
+
+### Queue dequeuing — respects mode
+
+```python
+def _dequeue_steering(self):
+    if not self._steering_queue:
+        return None
+    if self.steering_mode == "all":
+        msgs = list(self._steering_queue)
+        self._steering_queue.clear()
+        return msgs
+    else:  # one-at-a-time
+        return [self._steering_queue.pop(0)]
+
+# Same pattern for _dequeue_follow_ups
+```
+
+### Partial message handling on abort
+
+Pi carefully checks whether a partial message has real content before appending.
+If the agent is aborted mid-stream, the stream may end with a partial message that has
+only whitespace or empty content. Skip these — don't pollute the message history.
+
+### `convert_to_llm` default
+
+The Agent class provides a default `convert_to_llm` that filters to standard roles:
+```python
+def _default_convert_to_llm(messages):
+    return [m for m in messages if m.get("role") in ("user", "assistant", "tool")]
+```
+Consumers override this for custom message types or provider-specific workarounds
+(e.g., OpenAI multimodal tool results).
+
 ---
 
 ## Event Types
@@ -276,23 +403,24 @@ agent.follow_up_mode = "one-at-a-time"
 
 # Streaming deltas (within message_update)
 #
-# The "delta" field contains the raw litellm chunk delta (OpenAI format):
-#   delta.content            — text token from LLM (str or None)
-#   delta.reasoning_content  — thinking/reasoning token (str or None)
-#   delta.thinking_blocks    — Anthropic thinking blocks (list or None, includes signatures)
-#   delta.tool_calls         — tool call fragments (list[ChatCompletionDeltaToolCallChunk] or None)
+# The "delta" field is a plain JSON-serializable dict with only the fields
+# present in this chunk (no litellm objects leak through):
+#   {"content": "token"}                — text delta
+#   {"reasoning_content": "token"}      — thinking/reasoning delta
+#   {"thinking_blocks": [...]}          — Anthropic thinking blocks (includes signatures)
+#   {"tool_calls": [{"index": 0, ...}]} — tool call fragments as dicts
 #
-# We also add a "delta_type" convenience field:
-#   "text_delta"         — delta.content was present
-#   "thinking_delta"     — delta.reasoning_content was present
-#   "tool_call_delta"    — delta.tool_calls was present
+# "delta_type" indicates which kind:
+#   "text_delta"         — delta has "content"
+#   "thinking_delta"     — delta has "reasoning_content" or "thinking_blocks"
+#   "tool_call_delta"    — delta has "tool_calls"
 #
 # Note: deltas are for UI display only. Tool execution uses the finalized
 # assistant message from litellm, not reassembled deltas.
 
 # Tool execution lifecycle
 {"type": "tool_execution_start", "tool_call_id": ..., "tool_name": ..., "args": ...}
-{"type": "tool_execution_update", "tool_call_id": ..., "tool_name": ..., "partial": ...}
+{"type": "tool_execution_update", "tool_call_id": ..., "tool_name": ..., "args": ..., "partial": ...}
 {"type": "tool_execution_end", "tool_call_id": ..., "tool_name": ..., "result": ..., "is_error": bool}
 ```
 
@@ -418,21 +546,25 @@ raw parsed args are passed through — same as pi's browser fallback behavior.
 def agent_loop(messages, context, config, signal) -> EventStream:
     stream = EventStream()
     async def run():
+        new_messages = list(messages)
+        local_ctx = AgentContext(                         # shallow copy
+            system_prompt=context.system_prompt,
+            messages=list(context.messages) + list(messages),
+            tools=context.tools,
+        )
         stream.push({"type": "agent_start"})
         stream.push({"type": "turn_start"})
         for m in messages:
             stream.push({"type": "message_start", "message": m})
             stream.push({"type": "message_end", "message": m})
-            context.messages.append(m)
-        new_messages = list(messages)
-        new_messages = await run_loop(context, new_messages, config, signal, stream)
-        stream.push({"type": "agent_end", "messages": new_messages})
-        stream.end(new_messages)
+        await run_loop(local_ctx, new_messages, config, signal, stream)
     asyncio.create_task(run())
     return stream
 
-# The engine — no agent lifecycle events, only turn-level
-async def run_loop(context, new_messages, config, signal, stream) -> list:
+# The engine — handles normal + error termination (agent_end + stream.end).
+# Entry points have a finally fallback for CancelledError / unexpected BaseExceptions.
+# Same as pi-mono's runLoop (agent-loop.ts:104-198).
+async def run_loop(context, new_messages, config, signal, stream):
     pending_messages = await config.get_steering_messages()
     first_turn = True
 
@@ -448,7 +580,7 @@ async def run_loop(context, new_messages, config, signal, stream) -> list:
 
             # 1. Inject pending messages into context
             # 2. Stream LLM response → returns assistant_msg, appended to context + new_messages
-            # 3. If error/aborted: push turn_end, return new_messages
+            # 3. If error/aborted: emit turn_end + agent_end + stream.end, return
             # 4. Execute tools sequentially (check steering after each)
             #    - execute_tool_calls returns tool_results AND any steering messages found
             #    - Skipped tools get synthetic error results to keep tool call/result pairing balanced
@@ -463,7 +595,9 @@ async def run_loop(context, new_messages, config, signal, stream) -> list:
 
         break
 
-    return new_messages
+    # Normal exit
+    stream.push({"type": "agent_end", "messages": new_messages})
+    stream.end(new_messages)
 ```
 
 ### Why two loops?
@@ -482,7 +616,7 @@ async def stream_llm_response(context, config, stream, signal):
     # Hook: transform context before sending (compaction, pruning)
     messages = context.messages
     if config.transform_context:
-        messages = await config.transform_context(messages)
+        messages = await config.transform_context(messages, signal)
 
     # Hook: convert to LLM format (filter out UI-only message types)
     llm_messages = config.convert_to_llm(messages)
@@ -518,15 +652,19 @@ async def stream_llm_response(context, config, stream, signal):
             stream.push({"type": "message_update", "message": partial_msg,
                          "delta": delta, "delta_type": "tool_call_delta"})
 
-    # Build finalized assistant message from litellm response
-    # This is the canonical internal format — stored in context, emitted in events
-    assistant_msg = build_assistant_message(response, full_content, tool_calls, reasoning)
+    # Build finalized assistant message via litellm.stream_chunk_builder().
+    # Chunks collected during streaming → stream_chunk_builder assembles the
+    # complete ModelResponse (content, tool_calls, thinking_blocks, usage, etc.)
+    # This is Pi's equivalent of await response.result().
+    final = litellm.stream_chunk_builder(chunks)
+    assistant_msg = build_assistant_message(final)
     context.messages.append(assistant_msg)
 ```
 
 ### Canonical Assistant Message Shape
 
-Built from the finalized litellm response (not reassembled deltas):
+Built from `litellm.stream_chunk_builder(chunks)` — the finalized `ModelResponse`
+assembled from collected streaming chunks (equivalent to Pi's `response.result()`):
 
 ```python
 {
@@ -534,10 +672,12 @@ Built from the finalized litellm response (not reassembled deltas):
     "content": "response text" | None,              # None when only tool calls
     "tool_calls": [                                  # from litellm response
         {"id": "call_123", "type": "function",
-         "function": {"name": "bash", "arguments": '{"command": "ls"}'}},
+         "function": {"name": "bash", "arguments": '{"command": "ls"}'},
+         "provider_specific_fields": {...} | None},  # Gemini thought_signatures on tool calls
     ] | None,
     "thinking_blocks": [...] | None,                 # Anthropic only, includes signatures
     "reasoning_content": "thinking text" | None,     # universal, all providers
+    "provider_specific_fields": {...} | None,        # opaque bag from litellm (Gemini thought_signatures, etc.)
     "usage": {                                       # from litellm response.usage
         "prompt_tokens": 1234,                       # litellm field name (input tokens)
         "completion_tokens": 567,                    # litellm field name (output tokens)
@@ -550,11 +690,16 @@ Built from the finalized litellm response (not reassembled deltas):
 }
 ```
 
-This is our internal message format, assembled from litellm's response objects:
-- `content`, `tool_calls`, `reasoning_content`, `thinking_blocks` come from `response.choices[0].message` (Message class)
-- `stop_reason` comes from `response.choices[0].finish_reason` (mapped by litellm: Anthropic "tool_use" → "tool_calls", "end_turn" → "stop")
-- `usage` comes from `response.usage` (Usage class: `prompt_tokens`, `completion_tokens`, `total_tokens`, plus `prompt_tokens_details.cached_tokens` for cache reads)
-- `error` and `aborted` stop reasons are set by our loop, not litellm
+This is our internal message format, built from the finalized `ModelResponse` returned by
+`litellm.stream_chunk_builder(chunks)`. During streaming, chunks are collected in a list.
+After streaming completes, `stream_chunk_builder` assembles the complete response:
+- `content`, `tool_calls`, `reasoning_content`, `thinking_blocks` come from `final.choices[0].message`
+- `provider_specific_fields` comes from `final.choices[0].message` — opaque, preserved without interpretation
+- `stop_reason` is captured from the raw chunks during streaming (not from `stream_chunk_builder`,
+  which has a bug: the usage-only chunk from `stream_options={"include_usage": True}` overwrites the
+  real `finish_reason` with `None`). Mapped by litellm: Anthropic "tool_use" → "tool_calls",
+  "end_turn" → "stop". Or "aborted"/"error" set by our loop.
+- `usage` comes from `final.usage` (requires `stream_options={"include_usage": True}` on the original call)
 
 The loop reads `tool_calls` to decide whether to continue. Thinking fields are preserved
 for future messages (Anthropic requires them back).
@@ -613,7 +758,7 @@ class AgentConfig:
     get_follow_up_messages: Callable = None # check for queued messages (typically async)
 
     # LLM parameters
-    reasoning_effort: str = None            # "none", "minimal", "low", "medium", "high", "xhigh"
+    reasoning_effort: str = None            # "minimal", "low", "medium", "high", "xhigh"
                                             # None = don't send to litellm (no thinking)
                                             # litellm maps these to provider-specific budgets internally
                                             # (Anthropic → budget_tokens, Gemini → thinkingBudget, etc.)
@@ -673,7 +818,7 @@ On unhandled exceptions, the Agent class creates a synthetic assistant message:
 ```python
 error_msg = {
     "role": "assistant",
-    "content": "",
+    "content": None,
     "stop_reason": "aborted" if signal.is_set() else "error",
     "error_message": str(exception),
     "usage": {},  # zeroed out
@@ -724,29 +869,12 @@ litellm returns two fields:
 
 We store both. litellm handles sending the right format back to each provider.
 
-### Accumulating thinking blocks from streaming
+### Thinking block assembly
 
-**Critical:** litellm's streaming `delta.thinking_blocks` are **partial fragments**, not complete blocks.
-Each chunk contains a fragment with partial thinking text and an empty signature. The final chunk
-for a block carries the cryptographic signature. You must merge these into one block per thinking
-sequence — do NOT store each delta as a separate block.
-
-```python
-# WRONG — creates many blocks with partial text, Anthropic rejects them
-thinking_blocks.extend(delta_blocks)
-
-# RIGHT — merge fragments, finalize when signature arrives
-_cur = {"thinking": "", "signature": ""}
-for b in delta_blocks:
-    _cur["thinking"] += b.get("thinking", "")
-    if b.get("signature"):
-        _cur["signature"] = b["signature"]
-        thinking_blocks.append({"type": "thinking", **_cur})
-        _cur = {"thinking": "", "signature": ""}
-```
-
-Anthropic requires every thinking block to contain non-whitespace thinking text.
-Sending unmerged fragments causes: `"each thinking block must contain non-whitespace thinking"`.
+`litellm.stream_chunk_builder(chunks)` handles merging thinking block fragments
+(partial text + signature finalization) into complete blocks on the finalized
+`ModelResponse`. The loop does not need to merge thinking blocks manually — it
+collects chunks during streaming and delegates assembly to `stream_chunk_builder`.
 
 ```python
 litellm.modify_params = True
