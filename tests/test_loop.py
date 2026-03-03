@@ -35,7 +35,7 @@ ALL_MODELS = [
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
     "gemini/gemini-3-flash-preview",
-    "gemini/gemini-3.1-pro-preview",
+    # "gemini/gemini-3.1-pro-preview",  # consistently timing out (March 2026)
     "gpt-5.2",
 ]
 
@@ -2026,4 +2026,88 @@ async def test_gemini_provider_specific_fields_preserved(model):
         f"Expected provider_specific_fields on Gemini thinking + tool call response.\n"
         f"  message-level: {msg_psf}\n"
         f"  tool-call-level: {tc_psfs}"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", ALL_MODELS)
+async def test_stream_chunk_builder_finish_reason(model):
+    """stream_chunk_builder loses finish_reason when include_usage is set.
+
+    Known litellm bug: stream_options={"include_usage": True} adds a final
+    usage-only chunk with finish_reason=None. stream_chunk_builder iterates
+    all chunks and overwrites the real finish_reason (e.g. "length") with None
+    from the usage chunk, then its default "stop" kicks in.
+
+    This test documents the bug. When litellm fixes it, the xfail will start
+    passing — remove it then.
+    """
+    import litellm
+
+    chunks = []
+    response = await litellm.acompletion(
+        model=model,
+        messages=[
+            {"role": "system", "content": "Write a very long essay."},
+            {"role": "user", "content": "Go ahead."},
+        ],
+        stream=True,
+        stream_options={"include_usage": True},
+        max_tokens=5,
+    )
+    chunk_finish_reason = None
+    async for chunk in response:
+        chunks.append(chunk)
+        ch = chunk.choices[0] if chunk.choices else None
+        if ch and ch.finish_reason:
+            chunk_finish_reason = ch.finish_reason
+
+    final = litellm.stream_chunk_builder(chunks)
+    builder_finish_reason = final.choices[0].finish_reason
+
+    # The chunk has the correct value
+    assert chunk_finish_reason == "length", (
+        f"Expected chunk finish_reason='length', got {chunk_finish_reason!r}"
+    )
+
+    # stream_chunk_builder should agree — but currently doesn't (litellm bug)
+    if builder_finish_reason != chunk_finish_reason:
+        pytest.xfail(
+            f"litellm stream_chunk_builder bug: chunk says {chunk_finish_reason!r}, "
+            f"builder says {builder_finish_reason!r}. "
+            f"Usage-only chunk overwrites finish_reason with None."
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", ALL_MODELS)
+async def test_max_tokens_stop_reason(model):
+    """max_tokens produces stop_reason='length' through our loop.
+
+    Verifies our workaround for the stream_chunk_builder bug: we capture
+    finish_reason from chunks during streaming, not from stream_chunk_builder.
+    """
+    context = AgentContext(
+        system_prompt="Write a very long, detailed essay about mathematics.",
+        messages=[],
+        tools=None,
+    )
+    config = AgentConfig(
+        model=model,
+        convert_to_llm=make_convert_to_llm(model),
+        max_tokens=5,
+    )
+
+    stream = agent_loop(
+        [{"role": "user", "content": "Go ahead, write the essay."}],
+        context,
+        config,
+    )
+    result = await stream.result()
+    assistant = [m for m in result if m.get("role") == "assistant"][-1]
+
+    assert assistant["usage"]["completion_tokens"] <= 5
+    assert assistant["stop_reason"] == "length", (
+        f"Expected stop_reason='length', got {assistant['stop_reason']!r}. "
+        f"If 'stop', the stream_chunk_builder workaround may be broken."
     )

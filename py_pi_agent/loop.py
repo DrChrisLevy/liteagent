@@ -288,6 +288,8 @@ async def stream_llm_response(context, config, signal, stream):
     partial = {"role": "assistant", "content": None, "tool_calls": None}
     # Chunks collected for litellm.stream_chunk_builder (builds finalized response)
     chunks = []
+    # Capture finish_reason from chunks — stream_chunk_builder loses it (litellm bug)
+    chunk_finish_reason = None
 
     try:
         response = await litellm.acompletion(**kwargs)
@@ -304,6 +306,10 @@ async def stream_llm_response(context, config, signal, stream):
                 continue
 
             delta = choice.delta
+
+            # Capture finish_reason from chunks (stream_chunk_builder loses it)
+            if choice.finish_reason:
+                chunk_finish_reason = choice.finish_reason
 
             # Extract delta fields (not all exist on every chunk)
             delta_content = getattr(delta, "content", None)
@@ -468,7 +474,7 @@ async def stream_llm_response(context, config, signal, stream):
         stop_reason = (
             "aborted"
             if (signal and signal.is_set())
-            else (final.choices[0].finish_reason or "stop")
+            else (chunk_finish_reason or final.choices[0].finish_reason or "stop")
         )
 
         assistant_msg = {

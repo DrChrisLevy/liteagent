@@ -84,6 +84,26 @@ post-hoc only — it operates after all chunks are collected. Our 250-line
 incrementally, for live `message_update` events. The plumbing is correct
 (verified against `streaming_chunk_builder_utils.py`).
 
+### stream_chunk_builder loses finish_reason (bug)
+
+When `stream_options={"include_usage": True}` is set, providers send a final
+usage-only chunk with `finish_reason=None`. `stream_chunk_builder` iterates
+all chunks and overwrites the real `finish_reason` (e.g. `"length"`) with
+`None` from the usage chunk, then its default `"stop"` kicks in.
+
+Root cause in `streaming_chunk_builder_utils.py` lines 118-124:
+```python
+finish_reason = "stop"
+for chunk in chunks:
+    if hasattr(chunk["choices"][0], "finish_reason"):
+        finish_reason = chunk["choices"][0].finish_reason  # None overwrites "length"
+```
+
+Fix should be: `if ... and chunk["choices"][0].finish_reason is not None:`.
+
+Our workaround: capture `finish_reason` from chunks during streaming in
+`stream_llm_response()`, use that instead of `stream_chunk_builder`'s value.
+
 ## Thinking field inconsistency
 
 litellm promotes thinking to named fields — but inconsistently:
