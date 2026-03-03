@@ -556,10 +556,12 @@ assembled from collected streaming chunks (equivalent to Pi's `response.result()
     "content": "response text" | None,              # None when only tool calls
     "tool_calls": [                                  # from litellm response
         {"id": "call_123", "type": "function",
-         "function": {"name": "bash", "arguments": '{"command": "ls"}'}},
+         "function": {"name": "bash", "arguments": '{"command": "ls"}'},
+         "provider_specific_fields": {...} | None},  # Gemini thought_signatures on tool calls
     ] | None,
     "thinking_blocks": [...] | None,                 # Anthropic only, includes signatures
     "reasoning_content": "thinking text" | None,     # universal, all providers
+    "provider_specific_fields": {...} | None,        # opaque bag from litellm (Gemini thought_signatures, etc.)
     "usage": {                                       # from litellm response.usage
         "prompt_tokens": 1234,                       # litellm field name (input tokens)
         "completion_tokens": 567,                    # litellm field name (output tokens)
@@ -576,7 +578,11 @@ This is our internal message format, built from the finalized `ModelResponse` re
 `litellm.stream_chunk_builder(chunks)`. During streaming, chunks are collected in a list.
 After streaming completes, `stream_chunk_builder` assembles the complete response:
 - `content`, `tool_calls`, `reasoning_content`, `thinking_blocks` come from `final.choices[0].message`
-- `stop_reason` comes from `final.choices[0].finish_reason` (mapped by litellm: Anthropic "tool_use" → "tool_calls", "end_turn" → "stop"), or "aborted"/"error" set by our loop
+- `provider_specific_fields` comes from `final.choices[0].message` — opaque, preserved without interpretation
+- `stop_reason` is captured from the raw chunks during streaming (not from `stream_chunk_builder`,
+  which has a bug: the usage-only chunk from `stream_options={"include_usage": True}` overwrites the
+  real `finish_reason` with `None`). Mapped by litellm: Anthropic "tool_use" → "tool_calls",
+  "end_turn" → "stop". Or "aborted"/"error" set by our loop.
 - `usage` comes from `final.usage` (requires `stream_options={"include_usage": True}` on the original call)
 
 The loop reads `tool_calls` to decide whether to continue. Thinking fields are preserved
