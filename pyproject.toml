@@ -1,5 +1,5 @@
 [project]
-name = "py-pi-agent"
+name = "liteagent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"

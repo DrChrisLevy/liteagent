@@ -6,8 +6,8 @@ Fast tests use mocked litellm. Slow tests use real API calls.
 
 import pytest
 
-from py_pi_agent.agent import Agent
-from py_pi_agent.types import Tool, ToolResult
+from liteagent.agent import Agent
+from liteagent.types import Tool, ToolResult
 
 # ── Mock infrastructure ───────────────────────────────────────────────────
 
@@ -57,9 +57,9 @@ def mock_llm(monkeypatch):
             captured.update(kwargs)
             return async_iter(chunks)
 
-        monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", fake_acompletion)
+        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
         monkeypatch.setattr(
-            "py_pi_agent.loop.litellm.stream_chunk_builder", lambda _: final
+            "liteagent.loop.litellm.stream_chunk_builder", lambda _: final
         )
         return captured
 
@@ -75,9 +75,9 @@ def mock_llm_seq(monkeypatch):
         async def fake_acompletion(**kwargs):
             return async_iter(remaining_chunks.pop(0))
 
-        monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", fake_acompletion)
+        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
         monkeypatch.setattr(
-            "py_pi_agent.loop.litellm.stream_chunk_builder",
+            "liteagent.loop.litellm.stream_chunk_builder",
             lambda _: remaining_finals.pop(0),
         )
 
@@ -486,7 +486,7 @@ async def test_finally_cleanup(monkeypatch):
     async def exploding_acompletion(**kwargs):
         raise Exception("LLM exploded")
 
-    monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", exploding_acompletion)
+    monkeypatch.setattr("liteagent.loop.litellm.acompletion", exploding_acompletion)
 
     agent = Agent(model="test-model")
     await agent.prompt("Hi")
@@ -752,7 +752,7 @@ def _make_partial_stream(partial_msg):
     """
     import asyncio
 
-    from py_pi_agent.stream import EventStream
+    from liteagent.stream import EventStream
 
     stream = EventStream()
 
@@ -780,7 +780,7 @@ async def test_partial_with_named_tool_call_preserved(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "py_pi_agent.agent.agent_loop",
+        "liteagent.agent.agent_loop",
         lambda *a, **kw: _make_partial_stream(partial_msg),
     )
 
@@ -801,7 +801,7 @@ async def test_partial_with_empty_scaffold_discarded(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "py_pi_agent.agent.agent_loop",
+        "liteagent.agent.agent_loop",
         lambda *a, **kw: _make_partial_stream(partial_msg),
     )
 
@@ -827,7 +827,7 @@ async def test_partial_with_reasoning_preserved(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "py_pi_agent.agent.agent_loop",
+        "liteagent.agent.agent_loop",
         lambda *a, **kw: _make_partial_stream(partial_msg),
     )
 
@@ -848,7 +848,7 @@ async def test_partial_whitespace_reasoning_discarded(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "py_pi_agent.agent.agent_loop",
+        "liteagent.agent.agent_loop",
         lambda *a, **kw: _make_partial_stream(partial_msg),
     )
 
@@ -981,7 +981,7 @@ async def test_error_message_structure(monkeypatch):
     async def exploding_acompletion(**kwargs):
         raise Exception("boom")
 
-    monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", exploding_acompletion)
+    monkeypatch.setattr("liteagent.loop.litellm.acompletion", exploding_acompletion)
 
     agent = Agent(model="test-model")
     await agent.prompt("Hi")
@@ -1258,7 +1258,7 @@ async def test_transform_context_called(mock_llm):
 
 def test_default_convert_preserves_thinking_blocks():
     """_default_convert_to_llm preserves thinking_blocks on assistant messages."""
-    from py_pi_agent.agent import _default_convert_to_llm
+    from liteagent.agent import _default_convert_to_llm
 
     messages = [
         {
@@ -1289,7 +1289,7 @@ def test_default_convert_preserves_thinking_blocks():
 
 def test_default_convert_skips_none_thinking():
     """_default_convert_to_llm doesn't include None/empty thinking fields."""
-    from py_pi_agent.agent import _default_convert_to_llm
+    from liteagent.agent import _default_convert_to_llm
 
     messages = [
         {

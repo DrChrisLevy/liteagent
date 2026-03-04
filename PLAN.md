@@ -1,4 +1,4 @@
-# PLAN.md — How We Build py-pi-agent
+# PLAN.md — How We Build liteagent
 
 ## Philosophy
 
@@ -58,7 +58,7 @@ We **always** go on these detours when needed. Understanding > velocity.
 ## Project Layout
 
 ```
-py_pi_agent/               # the library (stream.py, types.py, loop.py, agent.py)
+liteagent/               # the library (stream.py, types.py, loop.py, agent.py)
 tests/                     # tests + test runner
 learnings/                 # deep dive explorations
 docs/                      # how the system works (written as we build)

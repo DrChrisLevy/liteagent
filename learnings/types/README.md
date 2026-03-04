@@ -1,6 +1,6 @@
 # Types Deep Dive
 
-Understanding every type in py-pi-agent — what it is, why it exists, and where it's used.
+Understanding every type in liteagent — what it is, why it exists, and where it's used.
 
 ## The Big Picture
 

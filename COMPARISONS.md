@@ -1,10 +1,10 @@
 # Framework Comparisons
 
-How py-pi-agent compares to existing agent SDKs.
+How liteagent compares to existing agent SDKs.
 
 ---
 
-## py-pi-agent vs OpenAI Agents SDK
+## liteagent vs OpenAI Agents SDK
 
 [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) (~19k GitHub stars) is the main
 Python agent framework to compare against. Here's how we differ:
@@ -25,7 +25,7 @@ Python agent framework to compare against. Here's how we differ:
 
 ### What we have that OpenAI SDK doesn't
 
-| py-pi-agent feature | Why it matters |
+| liteagent feature | Why it matters |
 |---|---|
 | **Steering (mid-run interruption)** | User can redirect agent while it's executing tools. OpenAI SDK has no equivalent. |
 | **Follow-up messages** | Queue messages that wait until agent finishes. OpenAI SDK doesn't support this. |
@@ -37,7 +37,7 @@ Python agent framework to compare against. Here's how we differ:
 ### Different philosophies
 
 - **OpenAI SDK**: "Here's everything, just use OpenAI" — batteries-included product, optimized for OpenAI models, lots of built-in features, vendor lock-in risk.
-- **py-pi-agent**: "Here's the core loop, bring your own everything" — learning project that could become a library, minimal, truly agnostic, pi's battle-tested patterns.
+- **liteagent**: "Here's the core loop, bring your own everything" — learning project that could become a library, minimal, truly agnostic, pi's battle-tested patterns.
 
 ### Ideas to steal later
 
@@ -48,7 +48,7 @@ Python agent framework to compare against. Here's how we differ:
 
 ---
 
-## py-pi-agent vs Anthropic Claude Agent SDK
+## liteagent vs Anthropic Claude Agent SDK
 
 [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) (~4.9k GitHub stars) is
 Anthropic's agent library — essentially Claude Code exposed as a programmable Python/TypeScript package.
@@ -57,7 +57,7 @@ Anthropic's agent library — essentially Claude Code exposed as a programmable 
 
 Claude Agent SDK is a **black box wrapper around Claude Code**. You don't implement tools or the loop.
 You call `query()`, Claude executes built-in tools (Read, Edit, Bash, etc.) internally, and you get
-back an async iterator of messages. py-pi-agent is the opposite — the loop is fully explicit and
+back an async iterator of messages. liteagent is the opposite — the loop is fully explicit and
 you implement everything.
 
 ### What Claude SDK has that we don't (and whether we care)
@@ -77,7 +77,7 @@ you implement everything.
 
 ### What we have that Claude SDK doesn't
 
-| py-pi-agent feature | Why it matters |
+| liteagent feature | Why it matters |
 |---|---|
 | **Explicit agent loop** | You understand and control every step. Claude SDK is opaque. |
 | **Any LLM** | GPT, Gemini, DeepSeek, local models. Claude SDK is Claude-only. |
@@ -95,7 +95,7 @@ you implement everything.
 
 ---
 
-## py-pi-agent vs Pydantic AI
+## liteagent vs Pydantic AI
 
 [Pydantic AI](https://ai.pydantic.dev/) (~15k GitHub stars) is from the Pydantic team. Their pitch:
 "Bring that FastAPI feeling to GenAI app development." Type-safe, model-agnostic, production-grade.
@@ -103,7 +103,7 @@ you implement everything.
 ### Fundamental difference
 
 Pydantic AI agents are **declarative and stateless** — you define an `Agent[DepsType, OutputType]`,
-call `run()` with inputs, get a result back. py-pi-agent agents are **stateful** — they hold message
+call `run()` with inputs, get a result back. liteagent agents are **stateful** — they hold message
 history, streaming state, and queues. You interact via `prompt()`, `steer()`, `follow_up()`, `abort()`.
 Pydantic AI has no concept of steering or follow-ups.
 
@@ -125,7 +125,7 @@ Pydantic AI has no concept of steering or follow-ups.
 
 ### What we have that Pydantic AI doesn't
 
-| py-pi-agent feature | Why it matters |
+| liteagent feature | Why it matters |
 |---|---|
 | **Steering (mid-run interruption)** | User can redirect agent while it's executing tools. Pydantic AI has no equivalent — `run()` is fire-and-forget. |
 | **Follow-up messages** | Queue messages that wait until agent finishes. Pydantic AI doesn't support this. |
@@ -139,7 +139,7 @@ Pydantic AI has no concept of steering or follow-ups.
 ### Different philosophies
 
 - **Pydantic AI**: "FastAPI for AI" — type-safe, batteries-included, production-grade, backed by VC-funded company. Optimized for structured output and observability. Declarative agents, stateless runs.
-- **py-pi-agent**: "Here's the core loop, bring your own everything" — minimal, stateful, hackable. Optimized for real-time interaction (steering, follow-ups, streaming). You understand every line.
+- **liteagent**: "Here's the core loop, bring your own everything" — minimal, stateful, hackable. Optimized for real-time interaction (steering, follow-ups, streaming). You understand every line.
 
 ### Ideas to steal from Pydantic AI
 
@@ -150,15 +150,15 @@ Pydantic AI has no concept of steering or follow-ups.
 
 ---
 
-## py-pi-agent vs pi-mono (our origin)
+## liteagent vs pi-mono (our origin)
 
-[pi-mono](https://github.com/badlogic/pi-mono) is the TypeScript agent framework py-pi-agent is ported
+[pi-mono](https://github.com/badlogic/pi-mono) is the TypeScript agent framework liteagent is ported
 from. Same author (pi/badlogic), battle-tested in production. This isn't a comparison of competitors —
 it's a comparison of the original and its Python translation.
 
 ### What we're faithfully porting
 
-| pi-mono pattern | py-pi-agent equivalent |
+| pi-mono pattern | liteagent equivalent |
 |---|---|
 | Dual while-loop (`runLoop()` in `agent-loop.ts`) | Same architecture in `loop.py` |
 | `EventStream<T, R>` async queue | `EventStream` in `stream.py` |
@@ -174,7 +174,7 @@ it's a comparison of the original and its Python translation.
 
 ### What we're doing differently
 
-| Difference | pi-mono (TypeScript) | py-pi-agent (Python) |
+| Difference | pi-mono (TypeScript) | liteagent (Python) |
 |---|---|---|
 | **LLM interface** | Hand-rolled providers (OpenAI, Anthropic, Google, etc.) | litellm — one `acompletion()` call handles all providers |
 | **Validation** | AJV (JSON Schema validation) | Pydantic — validates AND coerces types (e.g., `"42"` → `42`) |
@@ -189,7 +189,7 @@ it's a comparison of the original and its Python translation.
 
 pi-mono's `packages/ai/` directory contains thousands of lines of provider-specific streaming code:
 per-provider message conversion, chunk parsing, error handling, retry logic. All of that is replaced
-by a single litellm dependency in py-pi-agent. This is the biggest architectural simplification —
+by a single litellm dependency in liteagent. This is the biggest architectural simplification —
 our core loop is compact instead of needing thousands of lines of provider glue.
 
 The tradeoff: we depend on litellm's correctness and maintenance. But litellm is actively maintained,
@@ -249,7 +249,7 @@ These look like "missing features" when comparing code, but they're handled by o
 
 ## Philosophy Comparison (all five)
 
-| | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | pi-mono | py-pi-agent |
+| | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | pi-mono | liteagent |
 |---|---|---|---|---|---|
 | **Approach** | Claude Code as a library | Multi-agent framework | "FastAPI for AI" | Production TS agent loop | Core Python agent loop |
 | **Agent loop** | Black box | Visible but managed | Internal (graph iteration available) | Fully explicit | Fully explicit (ported from pi-mono) |

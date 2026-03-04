@@ -45,7 +45,8 @@
       "WebSearch",
       "WebFetch(domain:ai.pydantic.dev)",
       "WebFetch(domain:mariozechner.at)",
-      "WebFetch(domain:lucumr.pocoo.org)"
+      "WebFetch(domain:lucumr.pocoo.org)",
+      "WebFetch(domain:developers.openai.com)"
     ],
     "deny": [
       "Bash(git push --force:*)",

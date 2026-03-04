@@ -1,4 +1,4 @@
-# py-pi-agent — Spec
+# liteagent — Spec
 
 A Python core agent loop library inspired by [pi-mono](https://github.com/badlogic/pi-mono)'s `packages/agent`. Framework-agnostic, plug-and-play, usable from FastHTML, FastAPI, Slack, CLI, or anything else.
 
@@ -34,7 +34,7 @@ All four core modules are implemented and tested:
 ## Project Structure
 
 ```
-py_pi_agent/
+liteagent/
     __init__.py
     stream.py       # EventStream (async producer-consumer queue)
     types.py        # Event types, config, tool protocol, stop reasons
@@ -136,7 +136,7 @@ a callback before calling `prompt()`. The raw loop functions (`agent_loop`) stil
 `EventStream` for direct `async for` usage — but the Agent class does not expose it.
 
 ```python
-from py_pi_agent import Agent
+from liteagent import Agent
 
 agent = Agent(model="anthropic/claude-sonnet-4-6", tools=my_tools)
 
@@ -166,7 +166,7 @@ agent.subscribe(handle)
 await agent.prompt("Fix the bug in main.py")
 
 # Direct loop access (no Agent, raw EventStream)
-from py_pi_agent import agent_loop
+from liteagent import agent_loop
 stream = agent_loop(prompts, context, config)
 async for event in stream:
     print(event)
@@ -1043,7 +1043,7 @@ All decided:
 - ~~Subscribe pattern~~ → `subscribe()` is the Agent's consumer API (same as pi). `async for` on raw `EventStream` is for direct loop usage. The Agent does not return streams from `prompt()` — it is the sole reader of the loop's stream and emits to subscribers.
 - ~~Abort propagation~~ → Check `signal.is_set()` between streaming chunks from litellm. If set, break out of the chunk loop, build a partial message with `stop_reason="aborted"`. For tool execution, tools already receive the signal. Behavior contract: abort → stop_reason="aborted", cleanup runs, agent_end emitted.
 - ~~Testing strategy~~ → Real API calls for integration tests (Phase 2). Unit tests for EventStream/types need no LLM. Mock only for error paths hard to trigger with real APIs.
-- ~~Package name~~ → `py_pi_agent` (directory) / `py-pi-agent` (package). Already in pyproject.toml.
+- ~~Package name~~ → `liteagent` (directory) / `liteagent` (package). Already in pyproject.toml.
 - ~~@tool decorator~~ → Phase 4. `params_model` stays optional — tools can provide just JSON Schema (no Pydantic model required). Decorator will auto-generate both from type hints later.
 
 ---
@@ -1118,7 +1118,7 @@ See [COMPARISONS.md](COMPARISONS.md) for detailed comparisons with OpenAI Agents
 
 ## Test Runner
 
-A stripped-down interactive agent — the first real consumer of py-pi-agent. Inspired by
+A stripped-down interactive agent — the first real consumer of liteagent. Inspired by
 pi's coding-agent but minimal. Runs in the terminal, exercises every feature of the core loop.
 
 ### Structure
@@ -1248,7 +1248,7 @@ async def always_fail(tool_call_id, params, signal=None, on_update=None):
 ### System prompt (for test runner)
 
 ```
-You are a test agent for the py-pi-agent library. You have these tools:
+You are a test agent for the liteagent library. You have these tools:
 
 - echo: Echo back a message. Use for simple tests.
 - bash: Run shell commands. Output streams line by line.

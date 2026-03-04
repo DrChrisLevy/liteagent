@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from py_pi_agent.stream import EventStream
+from liteagent.stream import EventStream
 
 
 # --- Basic push/iterate/end ---
