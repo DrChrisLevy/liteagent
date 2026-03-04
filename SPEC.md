@@ -1,4 +1,4 @@
-# py-pi-agent — WIP Spec
+# py-pi-agent — Spec
 
 A Python core agent loop library inspired by [pi-mono](https://github.com/badlogic/pi-mono)'s `packages/agent`. Framework-agnostic, plug-and-play, usable from FastHTML, FastAPI, Slack, CLI, or anything else.
 
@@ -15,10 +15,25 @@ These are the models we test against and must work with:
 - `anthropic/claude-opus-4-6`
 - `anthropic/claude-sonnet-4-6`
 - `gemini/gemini-3-flash-preview`
-- `gemini/gemini-3.1-pro-preview`
+- `gemini/gemini-3.1-pro-preview` *(currently timing out — disabled in tests as of March 2026)*
 - `gpt-5.2`
 
-All use litellm model strings. Tests should pass against all five.
+All use litellm model strings. Tests should pass against all five (four active).
+
+## Implementation Status
+
+All four core modules are implemented and tested (~1,230 lines total):
+
+| Module | Lines | Status |
+|--------|-------|--------|
+| `stream.py` | 35 | Complete |
+| `types.py` | 75 | Complete |
+| `loop.py` | 685 | Complete (includes ~265 lines of streaming chunk handling that replaces pi-ai's streaming layer) |
+| `agent.py` | 420 | Complete |
+
+The loop logic itself (dual while loop + tool execution + entry points) is ~335 lines —
+the rest of `loop.py` is the `stream_llm_response` function which handles raw litellm
+streaming chunks (pi delegates this to its `@mariozechner/pi-ai` package).
 
 ## Project Structure
 
@@ -47,7 +62,11 @@ py_pi_agent/
 
 **Why litellm?** Pi built ~6,800 lines of provider-specific code (Anthropic, OpenAI, Google, Bedrock,
 etc.) to normalize streaming, tool calls, and thinking traces across providers. litellm does the same
-thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that.
+thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that. We also
+set `litellm.modify_params = True` which auto-fixes provider message format issues: inserting
+placeholder user messages for alternating-role providers, adding dummy tool definitions for orphaned
+tool calls, dropping thinking params when no thinking blocks are present, and sanitizing mismatched
+tool call/result pairs.
 
 **Provider boundary principle:** `loop.py` is provider-agnostic but boundary-defensive. No
 provider-specific control flow (`if anthropic:`, `if gemini:`) — but two kinds of leakage are
@@ -107,6 +126,12 @@ class EventStream:
 ```
 
 Built on `asyncio.Queue`. Events buffer in an unbounded queue if consumer is slow.
+
+**Single-consumer design:** Pi's `EventStream` supports multiple concurrent async iterators
+(via a waiters array). Ours uses a single `asyncio.Queue` — only one `async for` loop can
+consume it. This is intentional: the Agent class is the sole consumer of the loop's stream
+(same as pi in practice), and external consumers use `agent.subscribe()` callbacks instead.
+Multi-consumer support would add complexity for a pattern we don't use.
 
 ### Usage from any framework
 
@@ -420,7 +445,7 @@ def _handle_event(self, event):
 ```python
 def _dequeue_steering(self):
     if not self._steering_queue:
-        return None
+        return []
     if self.steering_mode == "all":
         msgs = list(self._steering_queue)
         self._steering_queue.clear()

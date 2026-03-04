@@ -44,8 +44,7 @@ Run `./dev lint` before committing.
 
 ### Project docs
 - `PLAN.md` — how we work, build order, learning philosophy
-- `COMPARISONS.md` — how we differ from OpenAI SDK, Claude SDK
-- `CHANGELOG.md` — what changed and when
+- `COMPARISONS.md` — how we differ from OpenAI SDK, Claude SDK, Pydantic AI, pi-mono (includes fidelity scorecard + litellm gap analysis)
 
 ## Git & GitHub
 
@@ -60,9 +59,9 @@ Run `./dev lint` before committing.
 - **Control flow** (steering, follow-ups, error exits): fast tests, thin litellm mock
 - **Anything through litellm** (chunks, usage, stop reasons, thinking): live slow tests
 - Don't mock what you can test live. Mocks break silently when litellm changes.
-- Target models (must pass all five):
+- Target models (must pass all five, four currently active):
   - `anthropic/claude-opus-4-6`
   - `anthropic/claude-sonnet-4-6`
   - `gemini/gemini-3-flash-preview`
-  - `gemini/gemini-3.1-pro-preview`
+  - `gemini/gemini-3.1-pro-preview` *(disabled — consistently timing out since March 2026)*
   - `gpt-5.2`

@@ -29,13 +29,14 @@ The human should understand every line.
 
 Work from the inside out:
 
-1. **EventStream** (`stream.py`) — the foundation everything flows through
-2. **Types** (`types.py`) — Tool, ToolResult, AgentConfig, events
-3. **Loop** (`loop.py`) — the dual while loop, streaming, tool execution
-4. **Agent** (`agent.py`) — stateful wrapper (prompt, steer, follow_up, abort)
-5. **Test runner** — prove it all works together with real API calls
+1. **EventStream** (`stream.py`) — the foundation everything flows through ✅
+2. **Types** (`types.py`) — Tool, ToolResult, AgentConfig, events ✅
+3. **Loop** (`loop.py`) — the dual while loop, streaming, tool execution ✅
+4. **Agent** (`agent.py`) — stateful wrapper (prompt, steer, follow_up, abort) ✅
+5. **Test runner** — prove it all works together with real API calls ✅
 
-At each step: write the code, write the tests, run it, understand it, then move on.
+All five steps complete. ~1,230 lines of implementation, ~1,100 lines of tests (fast + slow).
+See `COMPARISONS.md` for detailed fidelity analysis vs pi-mono.
 
 ## Learning Along the Way
 
@@ -64,6 +65,5 @@ docs/                      # how the system works (written as we build)
 SPEC.md                    # architecture and contracts
 PLAN.md                    # this file — how we work
 COMPARISONS.md             # framework comparisons
-CHANGELOG.md               # what changed and when
-AGENTS.md                  # brief instructions for AI agents
+AGENTS.md                  # brief instructions for AI agents (also used as CLAUDE.md)
 ```
