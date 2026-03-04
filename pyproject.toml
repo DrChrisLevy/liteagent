@@ -21,9 +21,6 @@ dev = [
     "seaborn>=0.13.2",
 ]
 
-[tool.ruff]
-extend-exclude = ["learnings"]
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["slow: real API calls (skip by default, run with -m slow)"]
