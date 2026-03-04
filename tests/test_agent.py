@@ -1251,3 +1251,76 @@ async def test_transform_context_called(mock_llm):
     # (captured["messages"] has system prompt prepended + convert_to_llm output)
     sent_contents = [m.get("content") for m in captured["messages"]]
     assert "INJECTED" in sent_contents
+
+
+# ── Fast tests: _default_convert_to_llm thinking branches ─────────────────
+
+
+def test_default_convert_preserves_thinking_blocks():
+    """_default_convert_to_llm preserves thinking_blocks on assistant messages."""
+    from py_pi_agent.agent import _default_convert_to_llm
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Hello",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Let me think..."}],
+            "reasoning_content": "I should say hello",
+            "tool_calls": None,
+            "usage": {"prompt_tokens": 10},
+            "stop_reason": "stop",
+            "timestamp": 12345,
+        }
+    ]
+    converted = _default_convert_to_llm(messages)
+
+    assert len(converted) == 1
+    msg = converted[0]
+    assert msg["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "Let me think..."}
+    ]
+    assert msg["reasoning_content"] == "I should say hello"
+    assert msg["content"] == "Hello"
+    # Extras should be stripped
+    assert "usage" not in msg
+    assert "stop_reason" not in msg
+    assert "timestamp" not in msg
+
+
+def test_default_convert_skips_none_thinking():
+    """_default_convert_to_llm doesn't include None/empty thinking fields."""
+    from py_pi_agent.agent import _default_convert_to_llm
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Hello",
+            "thinking_blocks": None,
+            "reasoning_content": None,
+            "tool_calls": None,
+        }
+    ]
+    converted = _default_convert_to_llm(messages)
+
+    msg = converted[0]
+    assert "thinking_blocks" not in msg
+    assert "reasoning_content" not in msg
+
+
+# ── Fast tests: mode getters/setters ──────────────────────────────────────
+
+
+def test_steering_mode_getter_setter():
+    """set/get_steering_mode round-trip."""
+    agent = Agent(model="test-model")
+    assert agent.get_steering_mode() == "one-at-a-time"
+    agent.set_steering_mode("all")
+    assert agent.get_steering_mode() == "all"
+
+
+def test_follow_up_mode_getter_setter():
+    """set/get_follow_up_mode round-trip."""
+    agent = Agent(model="test-model")
+    assert agent.get_follow_up_mode() == "one-at-a-time"
+    agent.set_follow_up_mode("all")
+    assert agent.get_follow_up_mode() == "all"

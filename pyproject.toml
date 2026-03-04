@@ -25,3 +25,6 @@ dev = [
 asyncio_mode = "auto"
 markers = ["slow: real API calls (skip by default, run with -m slow)"]
 timeout = 60
+
+[tool.coverage.run]
+omit = ["learnings/*"]

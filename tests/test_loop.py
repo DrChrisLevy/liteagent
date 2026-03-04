@@ -1848,6 +1848,18 @@ async def test_skip_tool_call_args_are_parsed_dict():
     assert events[0]["args"] == {"cmd": "ls"}
 
 
+async def test_skip_tool_call_malformed_json_args():
+    """_skip_tool_call with invalid JSON string args falls back to raw string."""
+    stream = EventStream()
+    tc = {"id": "call_0", "function": {"name": "bash", "arguments": "not valid json{"}}
+    _skip_tool_call(tc, stream)
+    stream.end()
+    events = await collect_events(stream)
+
+    # Should fall through to the raw string (JSON parse failed)
+    assert events[0]["args"] == "not valid json{"
+
+
 async def test_safety_net_error_message_has_all_keys(monkeypatch):
     """Safety net error_msg must include tool_calls, thinking_blocks, reasoning_content."""
 
