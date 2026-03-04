@@ -22,18 +22,14 @@ All use litellm model strings. Tests should pass against all five (four active).
 
 ## Implementation Status
 
-All four core modules are implemented and tested (~1,230 lines total):
+All four core modules are implemented and tested:
 
-| Module | Lines | Status |
-|--------|-------|--------|
-| `stream.py` | 35 | Complete |
-| `types.py` | 75 | Complete |
-| `loop.py` | 685 | Complete (includes ~265 lines of streaming chunk handling that replaces pi-ai's streaming layer) |
-| `agent.py` | 420 | Complete |
-
-The loop logic itself (dual while loop + tool execution + entry points) is ~335 lines —
-the rest of `loop.py` is the `stream_llm_response` function which handles raw litellm
-streaming chunks (pi delegates this to its `@mariozechner/pi-ai` package).
+| Module | Status |
+|--------|--------|
+| `stream.py` | Complete |
+| `types.py` | Complete |
+| `loop.py` | Complete (includes streaming chunk handling that replaces pi-ai's streaming layer) |
+| `agent.py` | Complete |
 
 ## Project Structure
 
@@ -60,7 +56,7 @@ py_pi_agent/
 
 ## Key Design Decisions (and why)
 
-**Why litellm?** Pi built ~6,800 lines of provider-specific code (Anthropic, OpenAI, Google, Bedrock,
+**Why litellm?** Pi hand-rolls provider-specific code (Anthropic, OpenAI, Google, Bedrock,
 etc.) to normalize streaming, tool calls, and thinking traces across providers. litellm does the same
 thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that. We also
 set `litellm.modify_params = True` which auto-fixes provider message format issues: inserting
@@ -1111,7 +1107,7 @@ Features pi has that we intentionally skip, and why:
 | Declaration merging for custom messages | TS-specific pattern | No — Python has simpler extensibility |
 | ThinkingBudgets (per-level token limits) | litellm maps reasoning_effort → provider budgets internally (Anthropic: budget_tokens, Gemini: thinkingBudget) | No — confirmed litellm handles it |
 | getApiKey hook | Dynamic API key resolution per LLM call (e.g., expiring OAuth tokens). litellm has its own key management for now | Maybe later if OAuth rotation needed |
-| Built-in provider implementations | litellm replaces all 6,800 lines | No |
+| Built-in provider implementations | litellm replaces all of pi's provider code | No |
 | TUI / Web UI | Consumer's problem | No |
 | Built-in tools | Consumer's problem | No |
 | Cross-model thinking conversion | Switching models mid-conversation leaves orphaned thinking blocks; `transform_context` hook can strip them if needed | Only if it causes real issues |

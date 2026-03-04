@@ -35,7 +35,7 @@ Work from the inside out:
 4. **Agent** (`agent.py`) — stateful wrapper (prompt, steer, follow_up, abort) ✅
 5. **Test runner** — prove it all works together with real API calls ✅
 
-All five steps complete. ~1,230 lines of implementation, ~1,100 lines of tests (fast + slow).
+All five steps complete.
 See `COMPARISONS.md` for detailed fidelity analysis vs pi-mono.
 
 ## Learning Along the Way

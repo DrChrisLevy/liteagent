@@ -32,7 +32,7 @@ Python agent framework to compare against. Here's how we differ:
 | **Streaming tool output (`on_update`)** | Tools can push partial results (e.g., bash output line-by-line). OpenAI SDK tools return all-or-nothing. |
 | **`transform_context` hook** | Modify messages before each LLM call (compaction, injection, pruning). No equivalent in OpenAI SDK. |
 | **Truly LLM-agnostic** | litellm-first, no vendor coupling. OpenAI SDK is OpenAI-first with real lock-in concerns. |
-| **Minimal core** | ~1,230 lines total (~335 lines of loop logic + ~265 lines of streaming). OpenAI SDK is a much larger surface area. |
+| **Minimal core** | Small, hackable codebase (4 files). OpenAI SDK is a much larger surface area. |
 
 ### Different philosophies
 
@@ -134,7 +134,7 @@ Pydantic AI has no concept of steering or follow-ups.
 | **Stateful agent** | Message history persists across calls. Pydantic AI requires passing `message_history=` manually each time. |
 | **Dual while-loop architecture** | Inner loop (tools + steering), outer loop (follow-ups). Enables complex interaction patterns. |
 | **Sequential tool execution** | Enables steering between tools. Pydantic AI tool execution model doesn't support interruption. |
-| **Minimal core** | ~1,230 lines total. Pydantic AI is a large framework (thousands of lines). |
+| **Minimal core** | Small, hackable codebase (4 files). Pydantic AI is a large framework. |
 
 ### Different philosophies
 
@@ -176,7 +176,7 @@ it's a comparison of the original and its Python translation.
 
 | Difference | pi-mono (TypeScript) | py-pi-agent (Python) |
 |---|---|---|
-| **LLM interface** | Hand-rolled providers (~6,800 lines across OpenAI, Anthropic, Google, etc.) | litellm — one `acompletion()` call handles all providers |
+| **LLM interface** | Hand-rolled providers (OpenAI, Anthropic, Google, etc.) | litellm — one `acompletion()` call handles all providers |
 | **Validation** | AJV (JSON Schema validation) | Pydantic — validates AND coerces types (e.g., `"42"` → `42`) |
 | **Proxy streaming** | Built-in proxy mode with bandwidth-optimized SSE reconstruction | Not needed — consumer handles transport |
 | **Session caching** | `sessionId` for provider-specific prompt cache hints | Not implementing — litellm handles this if needed |
@@ -187,10 +187,10 @@ it's a comparison of the original and its Python translation.
 
 ### Why litellm changes the game
 
-pi-mono's `packages/ai/` directory contains ~6,800 lines of provider-specific streaming code:
+pi-mono's `packages/ai/` directory contains thousands of lines of provider-specific streaming code:
 per-provider message conversion, chunk parsing, error handling, retry logic. All of that is replaced
 by a single litellm dependency in py-pi-agent. This is the biggest architectural simplification —
-it means our core loop logic is ~335 lines (plus ~265 lines of streaming chunk handling in `stream_llm_response`) instead of needing thousands of lines of provider glue.
+our core loop is compact instead of needing thousands of lines of provider glue.
 
 The tradeoff: we depend on litellm's correctness and maintenance. But litellm is actively maintained,
 widely used, and covers 100+ providers. The bet is worth it.
@@ -215,7 +215,7 @@ How close is our implementation to pi-mono's, component by component:
 | **Tool execution** | 98% | Same sequential model, steering interrupt, skip semantics, argument validation. |
 | **Agent class** | 95% | All core methods. Missing pi-specific options (sessionId, streamFn, transport — see litellm section below). |
 | **Event system** | 95% | Same 10 event types, same ordering. Dict-based vs pi's typed unions. |
-| **Streaming** | 85% | Works, but we handle raw litellm chunks ourselves (~265 lines) where pi delegates to pi-ai's parsed events. No injectable streamFn. |
+| **Streaming** | 85% | Works, but we handle raw litellm chunks ourselves where pi delegates to pi-ai's parsed events. No injectable streamFn. |
 | **Type system** | 70% | Intentionally different — plain dicts vs pi's typed message classes. No `CustomAgentMessages` declaration merging. |
 | **EventStream** | 90% | Single-consumer (vs pi's multi-consumer). Fine — Agent class is the sole consumer; externals use subscribe(). |
 
@@ -226,11 +226,11 @@ These look like "missing features" when comparing code, but they're handled by o
 
 | Pi feature | litellm equivalent | Gap? |
 |---|---|---|
-| `getApiKey(provider)` — dynamic per-call API key for expiring OAuth tokens | `acompletion(api_key=...)` per call; also supports `api_key="os.environ/VAR"` for dynamic resolution | **No** — ~3 lines to add if needed |
+| `getApiKey(provider)` — dynamic per-call API key for expiring OAuth tokens | `acompletion(api_key=...)` per call; also supports `api_key="os.environ/VAR"` for dynamic resolution | **No** — trivial to add if needed |
 | `thinkingBudgets` — custom token budgets per thinking level | `reasoning_effort` param mapped to provider-specific budgets automatically (Gemini → `thinkingBudget`, Anthropic → pass-through, OpenAI → pass-through) | **No** — already handled |
 | `maxRetryDelayMs` — cap on server-requested retry waits | Exponential backoff via tenacity with hardcoded 10s max. `num_retries` passed through. | **No** — already handled |
 | `transport` — SSE vs WebSocket selection | Not applicable — litellm uses httpx for all LLM calls. Transport is a pi/browser concept. | **N/A** |
-| Cost tracking | `litellm.include_cost_in_streaming_usage = True` + `completion_cost()`. Available, just not wired. | **Easy add** (~5 lines) |
+| Cost tracking | `litellm.include_cost_in_streaming_usage = True` + `completion_cost()`. Available, just not wired. | **Easy add** |
 | `sessionId` — provider-specific session caching (OpenAI Codex) | litellm doesn't pass session IDs to providers | **Minor gap** — only one provider uses it |
 | `streamFn` — injectable stream function for proxy backends | litellm already supports 100+ providers, custom base URLs, proxies | **Low priority** — reduced need |
 
@@ -260,4 +260,4 @@ These look like "missing features" when comparing code, but they're handled by o
 | **Streaming tools** | None | None | None | `onUpdate` callback | `on_update` callback (ported) |
 | **Lock-in** | Claude | OpenAI | None (but large framework) | None | None |
 | **Target user** | "Claude Code in my app" | "Multi-agent system fast" | "Type-safe AI apps in production" | "Full control, production TS" | "Understand the loop, learn Python" |
-| **Size** | Medium | High | Large | ~3,300 lines (5 core files) | ~1,230 lines (4 core files, litellm does the rest) |
+| **Size** | Medium | High | Large | 5 core files | 4 core files (litellm does the rest) |

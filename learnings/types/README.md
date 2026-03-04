@@ -471,7 +471,7 @@ Consumer calls agent.prompt("Fix the bug")
 | `OpenAICompletionsCompat` / `OpenRouterRouting` / etc. | Provider compatibility — litellm's problem |
 | `Model` | Model metadata/catalog — litellm's problem |
 
-Pi built ~6,800 lines of provider-specific code. litellm replaces ALL of it, which is why our types layer is so much smaller.
+Pi built thousands of lines of provider-specific code. litellm replaces all of it, which is why our types layer is so much smaller.
 
 ---
 

@@ -108,7 +108,7 @@ Sequential execution enables steering. After each tool, the loop can check:
 Python idioms, one major shortcut: we use [litellm](https://docs.litellm.ai/)
 instead of hand-rolling LLM provider code.
 
-Pi's `packages/ai/` directory contains **~6,800 lines** of provider-specific
+Pi's `packages/ai/` directory contains thousands of lines of provider-specific
 streaming code. Per-provider message conversion, chunk parsing, error handling,
 retry logic. All for Anthropic, OpenAI, Google, etc.
 

@@ -32,7 +32,7 @@ Run `./dev lint` before committing.
 
 ### Sources of truth
 - **`./SPEC.md`** — read this first. Architecture, contracts, event types, tool protocol, everything.
-- `../pi-mono/packages/agent/src/` — Pi core (5 files, ~3,300 lines). **The source of truth for behavior.** When in doubt, check the Pi source.
+- `../pi-mono/packages/agent/src/` — Pi core (5 files). **The source of truth for behavior.** When in doubt, check the Pi source.
   - `agent-loop.ts` — the dual loop
   - `agent.ts` — the Agent class wrapper
   - `types.ts` — all types and interfaces
@@ -40,7 +40,7 @@ Run `./dev lint` before committing.
 
 ### Reference
 - `../litellm/` — litellm source (cloned locally). Docs: https://docs.litellm.ai/
-- `../agents/agents/agent.py` — human's existing Python agent loop (~95 lines)
+- `../agents/agents/agent.py` — human's existing Python agent loop
 - Pi blogs: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ and https://lucumr.pocoo.org/2026/1/31/pi/
 
 ### Project docs
