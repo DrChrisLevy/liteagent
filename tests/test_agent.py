@@ -738,3 +738,349 @@ async def test_agent_abort_live():
     else:
         # No assistant message means the abort raised and error was captured
         assert agent.state.error is not None
+
+
+# ── Fast tests: partial preservation on abort ────────────────────────────
+
+
+def _make_partial_stream(partial_msg):
+    """Build an EventStream that emits message_start without message_end.
+
+    This simulates an interrupted stream where the loop crashes between
+    message_start and message_end — the edge case the partial preservation
+    code in _run_loop guards against (same as pi agent.ts:504-518).
+    """
+    import asyncio
+
+    from py_pi_agent.stream import EventStream
+
+    stream = EventStream()
+
+    async def _run():
+        stream.push({"type": "agent_start"})
+        stream.push({"type": "turn_start"})
+        stream.push({"type": "message_start", "message": partial_msg})
+        # No message_end — simulates interrupted stream
+        stream.push({"type": "agent_end", "messages": []})
+        stream.end([])
+
+    asyncio.get_running_loop().create_task(_run())
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_partial_with_named_tool_call_preserved(monkeypatch):
+    """Interrupted stream: partial with a named tool call is preserved."""
+    partial_msg = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "c0", "function": {"name": "read_file", "arguments": ""}}
+        ],
+    }
+
+    monkeypatch.setattr(
+        "py_pi_agent.agent.agent_loop",
+        lambda *a, **kw: _make_partial_stream(partial_msg),
+    )
+
+    agent = Agent(model="test-model")
+    await agent.prompt("Hi")
+
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert any(m.get("tool_calls") for m in assistants)
+
+
+@pytest.mark.asyncio
+async def test_partial_with_empty_scaffold_discarded(monkeypatch):
+    """Interrupted stream: partial with empty tool-call scaffold is discarded."""
+    partial_msg = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "", "function": {"name": "", "arguments": ""}}],
+    }
+
+    monkeypatch.setattr(
+        "py_pi_agent.agent.agent_loop",
+        lambda *a, **kw: _make_partial_stream(partial_msg),
+    )
+
+    agent = Agent(model="test-model")
+    agent._signal = None  # ensure abort path triggers
+    await agent.prompt("Hi")
+
+    # Empty scaffold should NOT have been preserved
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    for m in assistants:
+        if m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                assert (tc.get("function", {}).get("name") or "").strip()
+
+
+@pytest.mark.asyncio
+async def test_partial_with_reasoning_preserved(monkeypatch):
+    """Interrupted stream: partial with reasoning_content is preserved."""
+    partial_msg = {
+        "role": "assistant",
+        "content": None,
+        "reasoning_content": "Let me think about this...",
+    }
+
+    monkeypatch.setattr(
+        "py_pi_agent.agent.agent_loop",
+        lambda *a, **kw: _make_partial_stream(partial_msg),
+    )
+
+    agent = Agent(model="test-model")
+    await agent.prompt("Hi")
+
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert any(m.get("reasoning_content") for m in assistants)
+
+
+@pytest.mark.asyncio
+async def test_partial_whitespace_reasoning_discarded(monkeypatch):
+    """Interrupted stream: partial with whitespace-only reasoning is discarded."""
+    partial_msg = {
+        "role": "assistant",
+        "content": None,
+        "reasoning_content": "   \n  ",
+    }
+
+    monkeypatch.setattr(
+        "py_pi_agent.agent.agent_loop",
+        lambda *a, **kw: _make_partial_stream(partial_msg),
+    )
+
+    agent = Agent(model="test-model")
+    await agent.prompt("Hi")
+
+    # Whitespace-only reasoning should NOT be preserved
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    for m in assistants:
+        rc = m.get("reasoning_content")
+        if rc:
+            assert rc.strip(), "Whitespace-only reasoning should not be preserved"
+
+
+# ── Fast tests: steering during tool execution ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_steering_skips_remaining_tools(mock_llm_seq):
+    """Steering mid-tool-execution skips remaining tools."""
+    call_log = []
+    agent = None  # forward reference
+
+    async def tool_a_exec(tool_call_id, params, signal=None, on_update=None):
+        call_log.append("a")
+        # Inject steering DURING tool_a execution — should skip tool_b
+        agent.steer("Stop and do this instead")
+        return ToolResult(content=[{"type": "text", "text": "a done"}])
+
+    async def tool_b_exec(tool_call_id, params, signal=None, on_update=None):
+        call_log.append("b")
+        return ToolResult(content=[{"type": "text", "text": "b done"}])
+
+    tool_a = Tool(
+        name="tool_a",
+        description="Tool A",
+        parameters={"type": "object", "properties": {}},
+        execute=tool_a_exec,
+    )
+    tool_b = Tool(
+        name="tool_b",
+        description="Tool B",
+        parameters={"type": "object", "properties": {}},
+        execute=tool_b_exec,
+    )
+
+    tc_raw = [
+        {"id": "c0", "function": {"name": "tool_a", "arguments": "{}"}},
+        {"id": "c1", "function": {"name": "tool_b", "arguments": "{}"}},
+    ]
+
+    # Need real tool call chunks so the loop sees tool_calls on the assistant message
+    tc_chunk = make_chunk(
+        delta=_Obj(
+            content=None,
+            reasoning_content=None,
+            thinking_blocks=None,
+            tool_calls=[
+                _Obj(index=0, id="c0", function=_Obj(name="tool_a", arguments="{}")),
+                _Obj(index=1, id="c1", function=_Obj(name="tool_b", arguments="{}")),
+            ],
+        ),
+        finish_reason="tool_calls",
+    )
+
+    mock_llm_seq(
+        [
+            # First turn: assistant calls both tools
+            ([tc_chunk], make_final(tool_calls_raw=tc_raw, finish_reason="tool_calls")),
+            # Second turn: after steering, assistant responds
+            (
+                [make_chunk(delta=make_delta(content="redirected"))],
+                make_final(content="redirected"),
+            ),
+        ]
+    )
+
+    agent = Agent(model="test-model", tools=[tool_a, tool_b])
+    await agent.prompt("Call both tools")
+
+    # tool_a ran, tool_b should have been skipped
+    assert "a" in call_log
+    assert "b" not in call_log
+
+    # Steering message should appear in history
+    user_msgs = [m for m in agent.messages if m.get("role") == "user"]
+    contents = [m["content"] for m in user_msgs]
+    assert "Stop and do this instead" in contents
+
+
+# ── Fast tests: follow-up "all" mode ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_follow_up_all_mode(mock_llm_seq):
+    """'all' follow-up mode delivers all queued messages at once."""
+    mock_llm_seq(
+        [
+            (
+                [make_chunk(delta=make_delta(content="first"))],
+                make_final(content="first"),
+            ),
+            (
+                [make_chunk(delta=make_delta(content="got them"))],
+                make_final(content="got them"),
+            ),
+        ]
+    )
+
+    agent = Agent(model="test-model", follow_up_mode="all")
+    agent.follow_up("follow 1")
+    agent.follow_up("follow 2")
+    await agent.prompt("Start")
+
+    # Both follow-ups should have been delivered
+    user_msgs = [m for m in agent.messages if m.get("role") == "user"]
+    contents = [m["content"] for m in user_msgs]
+    assert "follow 1" in contents
+    assert "follow 2" in contents
+    assert not agent._follow_up_queue
+
+
+# ── Fast tests: error message structure ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_error_message_structure(monkeypatch):
+    """Error message has correct fields: stop_reason, error_message, usage, timestamp, model."""
+
+    async def exploding_acompletion(**kwargs):
+        raise Exception("boom")
+
+    monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", exploding_acompletion)
+
+    agent = Agent(model="test-model")
+    await agent.prompt("Hi")
+
+    error_msgs = [
+        m
+        for m in agent.messages
+        if m.get("role") == "assistant" and m.get("error_message")
+    ]
+    assert len(error_msgs) >= 1
+    err = error_msgs[-1]
+    assert err["stop_reason"] == "error"
+    assert "boom" in err["error_message"]
+    assert err["model"] == "test-model"
+    assert "prompt_tokens" in err["usage"]
+    assert isinstance(err["timestamp"], int)
+
+
+# ── Fast tests: wait_for_idle ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_wait_for_idle_when_idle():
+    """wait_for_idle returns immediately when not running."""
+    agent = Agent(model="test-model")
+    await agent.wait_for_idle()  # should not hang
+
+
+@pytest.mark.asyncio
+async def test_wait_for_idle_during_run(mock_llm):
+    """wait_for_idle resolves after prompt completes."""
+    chunks = [make_chunk(delta=make_delta(content="hi"))]
+    final = make_final(content="hi")
+    mock_llm(chunks, final)
+
+    agent = Agent(model="test-model")
+    await agent.prompt("Hi")
+    # After prompt returns, wait_for_idle should resolve immediately
+    await agent.wait_for_idle()
+    assert not agent.state.is_streaming
+
+
+# ── Fast tests: replace_messages ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_replace_messages():
+    """replace_messages replaces full history."""
+    agent = Agent(model="test-model")
+    agent.append_message({"role": "user", "content": "old"})
+    assert len(agent.messages) == 1
+
+    new_msgs = [
+        {"role": "user", "content": "new1"},
+        {"role": "assistant", "content": "new2"},
+    ]
+    agent.replace_messages(new_msgs)
+    assert len(agent.messages) == 2
+    assert agent.messages[0]["content"] == "new1"
+
+    # Should be a copy, not a reference
+    new_msgs.append({"role": "user", "content": "extra"})
+    assert len(agent.messages) == 2
+
+
+# ── Fast tests: clear_messages vs reset ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clear_messages_preserves_queues_and_error():
+    """clear_messages only clears messages, not queues or error."""
+    agent = Agent(model="test-model")
+    agent.append_message({"role": "user", "content": "hi"})
+    agent.steer("queued steering")
+    agent.follow_up("queued follow-up")
+    agent._state.error = "some error"
+
+    agent.clear_messages()
+
+    assert agent.messages == []
+    assert agent.has_queued_messages()  # queues preserved
+    assert agent.state.error == "some error"  # error preserved
+
+
+@pytest.mark.asyncio
+async def test_reset_clears_everything_except_config():
+    """reset clears messages, queues, and error. Keeps model/tools/system_prompt."""
+    agent = Agent(model="test-model", system_prompt="sys", tools=[_simple_tool()])
+    agent.append_message({"role": "user", "content": "hi"})
+    agent.steer("queued")
+    agent.follow_up("queued")
+    agent._state.error = "some error"
+
+    agent.reset()
+
+    assert agent.messages == []
+    assert not agent.has_queued_messages()
+    assert agent.state.error is None
+    # Config preserved
+    assert agent.state.model == "test-model"
+    assert agent.state.system_prompt == "sys"
+    assert len(agent.state.tools) == 1

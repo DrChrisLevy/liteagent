@@ -158,6 +158,16 @@ async for event in stream:
 Pi has two layers: the raw loop functions and a stateful `Agent` class on top.
 We do the same.
 
+**Message format adaptation:** Pi's `AgentMessage` uses content blocks (`[{type: "text", text: "..."}]`)
+and `role: "toolResult"`. We use Chat Completions format — bare strings for user content, `role: "tool"`
+for tool results — because that's what litellm speaks. The `convert_to_llm` hook bridges any custom
+message types to this format. This is an intentional adaptation, not a bug.
+
+**Intentionally omitted pi hooks:** Pi's Agent exposes `streamFn`, `sessionId`, `getApiKey`,
+`thinkingBudgets`, `transport`, and `maxRetryDelayMs`. We don't port these because litellm handles
+the equivalent concerns (provider routing, API keys via env vars, retry behavior). If needed later,
+they can be added to `AgentConfig` without changing the Agent class interface.
+
 ```python
 class Agent:
     """Stateful agent that wraps the core loop."""

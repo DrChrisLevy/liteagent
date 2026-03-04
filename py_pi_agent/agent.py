@@ -18,6 +18,18 @@ def _now_ms():
     return int(time.time() * 1000)
 
 
+def _has_nonempty_str(val):
+    """True if val is a non-whitespace string."""
+    return isinstance(val, str) and val.strip()
+
+
+def _any_tool_call_has_name(tool_calls):
+    """True if any tool call has a non-empty name (not just empty scaffold)."""
+    if not tool_calls:
+        return False
+    return any((tc.get("function", {}).get("name") or "").strip() for tc in tool_calls)
+
+
 def _to_user_msg(message):
     """Convert string or dict to a user message dict."""
     if isinstance(message, str):
@@ -261,7 +273,7 @@ class Agent:
 
     def _dequeue_steering(self):
         if not self._steering_queue:
-            return None
+            return []
         if self.steering_mode == "all":
             msgs = list(self._steering_queue)
             self._steering_queue.clear()
@@ -270,7 +282,7 @@ class Agent:
 
     def _dequeue_follow_ups(self):
         if not self._follow_up_queue:
-            return None
+            return []
         if self.follow_up_mode == "all":
             msgs = list(self._follow_up_queue)
             self._follow_up_queue.clear()
@@ -336,7 +348,15 @@ class Agent:
             partial = self._state.stream_message
             if partial and partial.get("role") == "assistant":
                 content = partial.get("content")
-                has_real_content = isinstance(content, str) and content.strip()
+                # Note: thinking_blocks are NOT accumulated on the partial during
+                # streaming (loop.py emits them as deltas only). Anthropic thinking
+                # is also surfaced as reasoning_content by litellm, so the
+                # reasoning_content check covers the thinking-only abort case.
+                has_real_content = (
+                    (isinstance(content, str) and content.strip())
+                    or _any_tool_call_has_name(partial.get("tool_calls"))
+                    or _has_nonempty_str(partial.get("reasoning_content"))
+                )
                 if has_real_content:
                     self._state.messages.append(partial)
                 elif self._signal and self._signal.is_set():
@@ -349,6 +369,7 @@ class Agent:
                 "tool_calls": None,
                 "thinking_blocks": None,
                 "reasoning_content": None,
+                "model": self._state.model,
                 "stop_reason": "aborted"
                 if (self._signal and self._signal.is_set())
                 else "error",
@@ -373,6 +394,7 @@ class Agent:
             self._signal = None
             if self._running_future and not self._running_future.done():
                 self._running_future.set_result(None)
+            self._running_future = None
 
     def _handle_event(self, event):
         """Update AgentState from events — same as pi's event loop in _runLoop."""
