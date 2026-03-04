@@ -1084,3 +1084,170 @@ async def test_reset_clears_everything_except_config():
     assert agent.state.model == "test-model"
     assert agent.state.system_prompt == "sys"
     assert len(agent.state.tools) == 1
+
+
+# ── Fast tests: continue_run streaming guard ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_continue_run_while_streaming_throws():
+    """continue_run() raises if agent is already streaming."""
+    agent = Agent(model="test-model")
+    agent._state.messages = [{"role": "user", "content": "Hi"}]
+    agent._state.is_streaming = True
+
+    with pytest.raises(RuntimeError, match="already processing"):
+        await agent.continue_run()
+
+    agent._state.is_streaming = False
+
+
+# ── Fast tests: follow-up one-at-a-time mode ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_follow_up_one_at_a_time_mode(mock_llm_seq):
+    """Default one-at-a-time follow-up mode delivers one message per poll."""
+    mock_llm_seq(
+        [
+            # First: answer the prompt
+            (
+                [make_chunk(delta=make_delta(content="first"))],
+                make_final(content="first"),
+            ),
+            # Second: answer follow-up 1
+            (
+                [make_chunk(delta=make_delta(content="second"))],
+                make_final(content="second"),
+            ),
+            # Third: answer follow-up 2
+            (
+                [make_chunk(delta=make_delta(content="third"))],
+                make_final(content="third"),
+            ),
+        ]
+    )
+
+    agent = Agent(model="test-model")  # default follow_up_mode="one-at-a-time"
+    agent.follow_up("follow 1")
+    agent.follow_up("follow 2")
+    await agent.prompt("Start")
+
+    # Both follow-ups should have been delivered (one per outer loop iteration)
+    user_msgs = [m for m in agent.messages if m.get("role") == "user"]
+    contents = [m["content"] for m in user_msgs]
+    assert "follow 1" in contents
+    assert "follow 2" in contents
+    assert not agent._follow_up_queue
+
+    # Should have 3 assistant responses (prompt + 2 follow-ups)
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert len(assistants) == 3
+
+
+# ── Fast tests: clear queue methods ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clear_steering_queue():
+    """clear_steering_queue clears only steering, preserves follow-up."""
+    agent = Agent(model="test-model")
+    agent.steer("s1")
+    agent.steer("s2")
+    agent.follow_up("f1")
+
+    agent.clear_steering_queue()
+
+    assert not agent._steering_queue
+    assert len(agent._follow_up_queue) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_follow_up_queue():
+    """clear_follow_up_queue clears only follow-up, preserves steering."""
+    agent = Agent(model="test-model")
+    agent.steer("s1")
+    agent.follow_up("f1")
+    agent.follow_up("f2")
+
+    agent.clear_follow_up_queue()
+
+    assert len(agent._steering_queue) == 1
+    assert not agent._follow_up_queue
+
+
+@pytest.mark.asyncio
+async def test_clear_all_queues():
+    """clear_all_queues clears both."""
+    agent = Agent(model="test-model")
+    agent.steer("s1")
+    agent.follow_up("f1")
+
+    agent.clear_all_queues()
+
+    assert not agent._steering_queue
+    assert not agent._follow_up_queue
+    assert not agent.has_queued_messages()
+
+
+# ── Fast tests: thinking_level reaches litellm ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_thinking_level_off_sends_no_reasoning(mock_llm):
+    """thinking_level='off' → reasoning_effort not in litellm kwargs."""
+    chunks = [make_chunk(delta=make_delta(content="ok"))]
+    final = make_final(content="ok")
+    captured = mock_llm(chunks, final)
+
+    agent = Agent(model="test-model")
+    assert agent.state.thinking_level == "off"
+    await agent.prompt("Hi")
+
+    assert "reasoning_effort" not in captured or captured["reasoning_effort"] is None
+
+
+@pytest.mark.asyncio
+async def test_thinking_level_sends_reasoning_effort(mock_llm):
+    """thinking_level='high' → reasoning_effort='high' in litellm kwargs."""
+    chunks = [make_chunk(delta=make_delta(content="ok"))]
+    final = make_final(content="ok")
+    captured = mock_llm(chunks, final)
+
+    agent = Agent(model="test-model")
+    agent.set_thinking_level("high")
+    await agent.prompt("Hi")
+
+    assert captured.get("reasoning_effort") == "high"
+
+
+# ── Fast tests: transform_context through Agent ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_transform_context_called(mock_llm):
+    """transform_context hook is called and modifies what the LLM sees."""
+    chunks = [make_chunk(delta=make_delta(content="ok"))]
+    final = make_final(content="ok")
+    captured = mock_llm(chunks, final)
+
+    transform_calls = []
+
+    def my_transform(messages, signal=None):
+        transform_calls.append(len(messages))
+        # Inject a system-like user message
+        return [{"role": "user", "content": "INJECTED"}] + messages
+
+    agent = Agent(
+        model="test-model",
+        transform_context=my_transform,
+    )
+    await agent.prompt("Real message")
+
+    # transform_context was called
+    assert len(transform_calls) == 1
+
+    # The LLM should have received the injected message
+    # (captured["messages"] has system prompt prepended + convert_to_llm output)
+    sent_contents = [m.get("content") for m in captured["messages"]]
+    assert "INJECTED" in sent_contents
