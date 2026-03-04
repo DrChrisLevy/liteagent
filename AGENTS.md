@@ -11,6 +11,7 @@ Everything runs through `uv`. No bare `python`, `pip`, or `pytest`.
 ./dev test                     # run tests (skips @pytest.mark.slow)
 ./dev test -m slow             # run only slow tests (real API calls)
 ./dev test -m ""               # run ALL tests
+./dev test -n auto             # run tests in parallel (any combo works with -m, --cov, etc.)
 ./dev lint                     # ruff check --fix + ruff format
 uv run python script.py        # run a script
 uv add <package>               # add dependency
