@@ -37,7 +37,7 @@ Python agent framework to compare against. Here's how we differ:
 ### Different philosophies
 
 - **OpenAI SDK**: "Here's everything, just use OpenAI" — batteries-included product, optimized for OpenAI models, lots of built-in features, vendor lock-in risk.
-- **liteagent**: "Here's the core loop, bring your own everything" — learning project that could become a library, minimal, truly agnostic, pi's battle-tested patterns.
+- **liteagent**: "Here's the core loop, bring your own everything" — minimal, truly agnostic, pi's battle-tested patterns.
 
 ### Ideas to steal later
 

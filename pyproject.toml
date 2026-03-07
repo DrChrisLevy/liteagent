@@ -1,13 +1,33 @@
 [project]
 name = "liteagent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Minimal async agent loop with streaming, steering, and tool execution"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+authors = [
+    { name = "Chris Levy" },
+]
+keywords = ["agent", "llm", "async", "streaming", "tool-calling"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+]
 dependencies = [
     "litellm>=1.81.14",
     "pydantic>=2.12.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/DrChrisLevy/liteagent"
+Repository = "https://github.com/DrChrisLevy/liteagent"
+Issues = "https://github.com/DrChrisLevy/liteagent/issues"
+Author = "https://drchrislevy.com/"
 
 [dependency-groups]
 dev = [
