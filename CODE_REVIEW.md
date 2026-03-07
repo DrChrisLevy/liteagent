@@ -28,7 +28,6 @@ Priority:
 | `CR-001` | `P1` | `open` | Abort cannot interrupt a pending LLM startup await |
 | `CR-002` | `P2` | `open` | Default Agent converter drops Gemini `thought_signatures` |
 | `CR-003` | `P2` | `sharp-edge` | Default Agent converter drops tool-result images |
-| `CR-004` | `P2` | `open` | Usage extraction misses nested `cache_creation_tokens` |
 | `CR-005` | `P3` | `backlog` | Messages are still untyped dicts throughout the core loop |
 | `CR-006` | `P3` | `backlog` | Agent and loop both append messages, relying on copied lists |
 
@@ -103,25 +102,6 @@ Priority:
   - default converter image behavior for Anthropic / Gemini expectations
   - default converter OpenAI fallback behavior if provider-aware conversion is added
 
-### `CR-004` Usage extraction misses nested `cache_creation_tokens`
-
-- Priority: `P2`
-- Status: `open`
-- Type: accounting bug at the LiteLLM boundary
-- liteagent:
-  - `liteagent/loop.py:53-61`
-- Design notes:
-  - `DESIGN_NOTES.md` section `Known LiteLLM-Driven Differences`
-- Why this matters:
-  - `_extract_usage()` reads top-level `cache_creation_input_tokens`, but not nested `usage.prompt_tokens_details.cache_creation_tokens`.
-  - When LiteLLM uses the nested shape, cache-write accounting is under-reported even though the data exists.
-- pi-mono note:
-  - This is not a direct `pi-mono` parity issue. `pi-mono` normalizes usage upstream into a stable shape, so this specific boundary bug does not exist there.
-- Suggested fix:
-  - Fall back to `usage.prompt_tokens_details.cache_creation_tokens` when the top-level field is absent.
-- Tests to add:
-  - helper coverage for nested `cache_creation_tokens`
-
 ## Backlog
 
 ### `CR-005` Messages are still untyped dicts
@@ -166,10 +146,7 @@ Priority:
 
 These are real but not worth mixing into the active bug list:
 
-- `_now_ms()` is duplicated in `liteagent/loop.py` and `liteagent/agent.py`
-- `_dequeue_steering()` / `_dequeue_follow_ups()` use `list.pop(0)` instead of `deque`
 - dataclass `__repr__` output is noisy for debugging
-- the test mock helpers are duplicated between `tests/test_loop.py` and `tests/test_agent.py`
 
 ## Focused Test Gaps
 
@@ -177,5 +154,4 @@ If adding tests next, do these first:
 
 - pending `litellm.acompletion()` cancellation before first chunk
 - default Agent converter preservation of Gemini `provider_specific_fields`
-- nested `prompt_tokens_details.cache_creation_tokens` usage extraction
 - default Agent converter behavior for multimodal tool results

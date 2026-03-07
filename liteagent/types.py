@@ -1,5 +1,11 @@
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Literal
+
+
+def _now_ms():
+    return int(time.time() * 1000)
+
 
 StopReason = Literal["stop", "tool_calls", "length", "error", "aborted"]
 

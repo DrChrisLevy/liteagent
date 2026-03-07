@@ -12,12 +12,11 @@ Faithful port of pi-mono's agent-loop.ts.
 import asyncio
 import inspect
 import json
-import time
 
 import litellm
 
 from .stream import EventStream
-from .types import AgentContext, ToolResult
+from .types import AgentContext, ToolResult, _now_ms
 
 # Auto-fix provider message format issues:
 # - inserts placeholder user messages for alternating roles (Anthropic, Bedrock)
@@ -28,10 +27,6 @@ litellm.modify_params = True
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-
-
-def _now_ms():
-    return int(time.time() * 1000)
 
 
 async def _maybe_await(fn, *args):
@@ -58,7 +53,11 @@ def _extract_usage(usage):
         or (getattr(details, "cached_tokens", 0) or 0 if details else 0)
         or 0
     )
-    cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_creation = (
+        getattr(usage, "cache_creation_input_tokens", 0)
+        or (getattr(details, "cache_creation_tokens", 0) or 0 if details else 0)
+        or 0
+    )
     return {
         "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
         "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,

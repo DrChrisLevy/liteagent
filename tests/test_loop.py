@@ -28,6 +28,15 @@ from liteagent.loop import (
 )
 from liteagent.stream import EventStream
 from liteagent.types import AgentConfig, AgentContext, Tool, ToolResult
+from tests.mock_helpers import (
+    _Obj,
+    make_chunk,
+    make_delta,
+    make_final,
+    make_tc_delta,
+    simple_tool as _simple_tool,
+    tc_msg as _tc_msg,
+)
 
 # ── Target models ──────────────────────────────────────────────────────────
 
@@ -240,49 +249,6 @@ def event_types(events: list[dict]) -> list[str]:
 # ── Mock infrastructure ────────────────────────────────────────────────────
 
 
-class _Obj:
-    """Attribute bag — only has the attrs you set."""
-
-    def __init__(self, **kw):
-        self.__dict__.update(kw)
-
-
-def make_delta(**kw):
-    return _Obj(**{k: v for k, v in kw.items() if v is not None})
-
-
-def make_chunk(delta=None, finish_reason=None):
-    return _Obj(
-        choices=[_Obj(delta=delta or make_delta(), finish_reason=finish_reason)]
-    )
-
-
-def make_tc_delta(index, id=None, name=None, arguments=None):
-    func = _Obj(name=name, arguments=arguments) if (name or arguments) else None
-    return _Obj(index=index, id=id, function=func)
-
-
-def make_final(content=None, tool_calls_raw=None, finish_reason="stop", usage=None):
-    tc = None
-    if tool_calls_raw:
-        tc = [
-            _Obj(
-                id=t["id"],
-                function=_Obj(
-                    name=t["function"]["name"], arguments=t["function"]["arguments"]
-                ),
-            )
-            for t in tool_calls_raw
-        ]
-    msg = _Obj(content=content, tool_calls=tc)
-    return _Obj(choices=[_Obj(message=msg, finish_reason=finish_reason)], usage=usage)
-
-
-async def async_iter(items):
-    for item in items:
-        yield item
-
-
 def make_context(system_prompt="You are helpful.", messages=None, tools=None):
     return AgentContext(
         system_prompt=system_prompt,
@@ -297,77 +263,6 @@ def make_config(model="test-model", **kw):
         convert_to_llm=kw.pop("convert_to_llm", lambda msgs: msgs),
         **kw,
     )
-
-
-def _simple_tool(name="test_tool", execute_fn=None):
-    """Build a minimal Tool for testing."""
-
-    async def _default(tool_call_id, params, signal=None, on_update=None):
-        return ToolResult(content=[{"type": "text", "text": "ok"}])
-
-    return Tool(
-        name=name,
-        description=f"Test tool: {name}",
-        parameters={"type": "object", "properties": {}},
-        execute=execute_fn or _default,
-    )
-
-
-def _tc_msg(calls):
-    """Build assistant message with tool_calls."""
-    return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": f"call_{i}",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps(args) if isinstance(args, dict) else args,
-                },
-            }
-            for i, (name, args) in enumerate(calls)
-        ],
-    }
-
-
-@pytest.fixture
-def mock_llm(monkeypatch):
-    """Single-turn litellm mock. Returns captured kwargs dict."""
-    captured = {}
-
-    def _mock(chunks, final):
-        async def fake_acompletion(**kwargs):
-            captured.update(kwargs)
-            return async_iter(chunks)
-
-        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
-        monkeypatch.setattr(
-            "liteagent.loop.litellm.stream_chunk_builder", lambda _: final
-        )
-        return captured
-
-    return _mock
-
-
-@pytest.fixture
-def mock_llm_seq(monkeypatch):
-    """Multi-turn litellm mock. Takes list of (chunks, final) per LLM call."""
-
-    def _mock(turns):
-        remaining_chunks = [t[0] for t in turns]
-        remaining_finals = [t[1] for t in turns]
-
-        async def fake_acompletion(**kwargs):
-            return async_iter(remaining_chunks.pop(0))
-
-        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
-        monkeypatch.setattr(
-            "liteagent.loop.litellm.stream_chunk_builder",
-            lambda _: remaining_finals.pop(0),
-        )
-
-    return _mock
 
 
 # ── Group 1: Pure helpers ─────────────────────────────────────────────────
@@ -422,6 +317,20 @@ async def test_extract_usage_anthropic_cache_tokens():
     u = _extract_usage(usage)
     assert u["cache_read_tokens"] == 300
     assert u["cache_creation_tokens"] == 200
+
+
+async def test_extract_usage_nested_cache_creation():
+    """Nested cache_creation_tokens in prompt_tokens_details (CR-004)."""
+    details = _Obj(cached_tokens=100, cache_creation_tokens=75)
+    usage = _Obj(
+        prompt_tokens=500,
+        completion_tokens=50,
+        total_tokens=550,
+        prompt_tokens_details=details,
+    )
+    u = _extract_usage(usage)
+    assert u["cache_read_tokens"] == 100
+    assert u["cache_creation_tokens"] == 75
 
 
 async def test_validate_tool_args_no_model():

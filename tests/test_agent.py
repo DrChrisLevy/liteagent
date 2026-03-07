@@ -9,94 +9,13 @@ import pytest
 from liteagent.agent import Agent
 from liteagent.types import Tool, ToolResult
 
-# ── Mock infrastructure ───────────────────────────────────────────────────
-
-
-class _Obj:
-    def __init__(self, **kw):
-        self.__dict__.update(kw)
-
-
-def make_delta(**kw):
-    return _Obj(**{k: v for k, v in kw.items() if v is not None})
-
-
-def make_chunk(delta=None, finish_reason=None):
-    return _Obj(
-        choices=[_Obj(delta=delta or make_delta(), finish_reason=finish_reason)]
-    )
-
-
-def make_final(content=None, tool_calls_raw=None, finish_reason="stop", usage=None):
-    tc = None
-    if tool_calls_raw:
-        tc = [
-            _Obj(
-                id=t["id"],
-                function=_Obj(
-                    name=t["function"]["name"], arguments=t["function"]["arguments"]
-                ),
-            )
-            for t in tool_calls_raw
-        ]
-    msg = _Obj(content=content, tool_calls=tc)
-    return _Obj(choices=[_Obj(message=msg, finish_reason=finish_reason)], usage=usage)
-
-
-async def async_iter(items):
-    for item in items:
-        yield item
-
-
-@pytest.fixture
-def mock_llm(monkeypatch):
-    captured = {}
-
-    def _mock(chunks, final):
-        async def fake_acompletion(**kwargs):
-            captured.update(kwargs)
-            return async_iter(chunks)
-
-        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
-        monkeypatch.setattr(
-            "liteagent.loop.litellm.stream_chunk_builder", lambda _: final
-        )
-        return captured
-
-    return _mock
-
-
-@pytest.fixture
-def mock_llm_seq(monkeypatch):
-    def _mock(turns):
-        remaining_chunks = [t[0] for t in turns]
-        remaining_finals = [t[1] for t in turns]
-
-        async def fake_acompletion(**kwargs):
-            return async_iter(remaining_chunks.pop(0))
-
-        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
-        monkeypatch.setattr(
-            "liteagent.loop.litellm.stream_chunk_builder",
-            lambda _: remaining_finals.pop(0),
-        )
-
-    return _mock
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────
-
-
-def _simple_tool(name="test_tool", execute_fn=None):
-    async def _default(tool_call_id, params, signal=None, on_update=None):
-        return ToolResult(content=[{"type": "text", "text": "ok"}])
-
-    return Tool(
-        name=name,
-        description=f"Test tool: {name}",
-        parameters={"type": "object", "properties": {}},
-        execute=execute_fn or _default,
-    )
+from tests.mock_helpers import (
+    _Obj,
+    make_chunk,
+    make_delta,
+    make_final,
+    simple_tool as _simple_tool,
+)
 
 
 # ── Fast tests: basic prompt ─────────────────────────────────────────────

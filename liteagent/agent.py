@@ -8,14 +8,9 @@ Faithful port of pi-mono's agent.ts.
 """
 
 import asyncio
-import time
 
 from .loop import agent_loop, agent_loop_continue
-from .types import AgentConfig, AgentContext, AgentState
-
-
-def _now_ms():
-    return int(time.time() * 1000)
+from .types import AgentConfig, AgentContext, AgentState, _now_ms
 
 
 def _has_nonempty_str(val):
