@@ -256,7 +256,7 @@ class Agent:
         return unsubscribe
 
     def _emit(self, event):
-        for fn in self._subscribers:
+        for fn in list(self._subscribers):  # snapshot: safe if fn() unsubscribes
             fn(event)
 
     # ── State access ──────────────────────────────────────────────────────

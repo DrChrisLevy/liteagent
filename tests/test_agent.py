@@ -302,6 +302,37 @@ async def test_subscribe_and_unsubscribe(mock_llm):
     assert len(events_received) == count_before
 
 
+@pytest.mark.asyncio
+async def test_unsubscribe_during_emit_does_not_skip_subscribers():
+    """Unsubscribing mid-emission must not skip the next subscriber.
+
+    Real-world case: a one-shot listener unsubscribes on agent_end,
+    causing the next subscriber (e.g. a logger) to miss that same event.
+    """
+    from liteagent.agent import Agent
+
+    agent = Agent(model="test-model")
+    b_saw_it = []
+
+    unsub_a = None
+
+    def subscriber_a(e):
+        unsub_a()  # one-shot: unsubscribe after first event
+
+    def subscriber_b(e):
+        b_saw_it.append(e)
+
+    unsub_a = agent.subscribe(subscriber_a)
+    agent.subscribe(subscriber_b)
+
+    agent._emit({"type": "agent_end"})
+
+    assert len(b_saw_it) == 1, (
+        f"Subscriber B saw {len(b_saw_it)} events, expected 1. "
+        "List mutation during _emit skipped subscriber B."
+    )
+
+
 # ── Fast tests: continue_run ─────────────────────────────────────────────
 
 
