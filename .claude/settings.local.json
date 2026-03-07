@@ -46,7 +46,9 @@
       "WebFetch(domain:ai.pydantic.dev)",
       "WebFetch(domain:mariozechner.at)",
       "WebFetch(domain:lucumr.pocoo.org)",
-      "WebFetch(domain:developers.openai.com)"
+      "WebFetch(domain:developers.openai.com)",
+      "mcp__plugin_slack_slack__slack_search_public",
+      "mcp__plugin_slack_slack__slack_read_thread"
     ],
     "deny": [
       "Bash(git push --force:*)",
