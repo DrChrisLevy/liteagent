@@ -104,11 +104,11 @@ Sequential execution enables steering. After each tool, the loop can check:
 
 ## What We're Building
 
-**py-pi-agent** is a Python port of pi's core agent loop. Same architecture,
+**liteagent** is a Python port of pi's core agent loop. Same architecture,
 Python idioms, one major shortcut: we use [litellm](https://docs.litellm.ai/)
 instead of hand-rolling LLM provider code.
 
-Pi's `packages/ai/` directory contains **~6,800 lines** of provider-specific
+Pi's `packages/ai/` directory contains thousands of lines of provider-specific
 streaming code. Per-provider message conversion, chunk parsing, error handling,
 retry logic. All for Anthropic, OpenAI, Google, etc.
 
@@ -130,7 +130,7 @@ Streaming chunks, tool calls, thinking tokens, usage tracking (it's all unified)
 ### The four files
 
 ```
-py_pi_agent/
+liteagent/
     stream.py     EventStream — async queue that connects producer to consumer
     types.py      Tool, ToolResult, AgentConfig — the vocabulary
     loop.py       The dual while-loop — the engine
@@ -152,7 +152,7 @@ All of that is the consumer's problem.
 │  - Handles UI / transport                           │
 │  - Manages persistence                              │
 ├─────────────────────────────────────────────────────┤
-│  py-pi-agent                                        │
+│  liteagent                                        │
 │                                                     │
 │  Agent class ─── prompt(), steer(), follow_up()     │
 │       │                                             │

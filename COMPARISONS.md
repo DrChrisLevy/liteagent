@@ -1,10 +1,10 @@
 # Framework Comparisons
 
-How py-pi-agent compares to existing agent SDKs.
+How liteagent compares to existing agent SDKs.
 
 ---
 
-## py-pi-agent vs OpenAI Agents SDK
+## liteagent vs OpenAI Agents SDK
 
 [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) (~19k GitHub stars) is the main
 Python agent framework to compare against. Here's how we differ:
@@ -25,19 +25,19 @@ Python agent framework to compare against. Here's how we differ:
 
 ### What we have that OpenAI SDK doesn't
 
-| py-pi-agent feature | Why it matters |
+| liteagent feature | Why it matters |
 |---|---|
 | **Steering (mid-run interruption)** | User can redirect agent while it's executing tools. OpenAI SDK has no equivalent. |
 | **Follow-up messages** | Queue messages that wait until agent finishes. OpenAI SDK doesn't support this. |
 | **Streaming tool output (`on_update`)** | Tools can push partial results (e.g., bash output line-by-line). OpenAI SDK tools return all-or-nothing. |
 | **`transform_context` hook** | Modify messages before each LLM call (compaction, injection, pruning). No equivalent in OpenAI SDK. |
 | **Truly LLM-agnostic** | litellm-first, no vendor coupling. OpenAI SDK is OpenAI-first with real lock-in concerns. |
-| **Minimal core** | ~300 lines of loop code. OpenAI SDK is a much larger surface area to understand. |
+| **Minimal core** | Small, hackable codebase (4 files). OpenAI SDK is a much larger surface area. |
 
 ### Different philosophies
 
 - **OpenAI SDK**: "Here's everything, just use OpenAI" — batteries-included product, optimized for OpenAI models, lots of built-in features, vendor lock-in risk.
-- **py-pi-agent**: "Here's the core loop, bring your own everything" — learning project that could become a library, minimal, truly agnostic, pi's battle-tested patterns.
+- **liteagent**: "Here's the core loop, bring your own everything" — learning project that could become a library, minimal, truly agnostic, pi's battle-tested patterns.
 
 ### Ideas to steal later
 
@@ -48,7 +48,7 @@ Python agent framework to compare against. Here's how we differ:
 
 ---
 
-## py-pi-agent vs Anthropic Claude Agent SDK
+## liteagent vs Anthropic Claude Agent SDK
 
 [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) (~4.9k GitHub stars) is
 Anthropic's agent library — essentially Claude Code exposed as a programmable Python/TypeScript package.
@@ -57,7 +57,7 @@ Anthropic's agent library — essentially Claude Code exposed as a programmable 
 
 Claude Agent SDK is a **black box wrapper around Claude Code**. You don't implement tools or the loop.
 You call `query()`, Claude executes built-in tools (Read, Edit, Bash, etc.) internally, and you get
-back an async iterator of messages. py-pi-agent is the opposite — the loop is fully explicit and
+back an async iterator of messages. liteagent is the opposite — the loop is fully explicit and
 you implement everything.
 
 ### What Claude SDK has that we don't (and whether we care)
@@ -77,7 +77,7 @@ you implement everything.
 
 ### What we have that Claude SDK doesn't
 
-| py-pi-agent feature | Why it matters |
+| liteagent feature | Why it matters |
 |---|---|
 | **Explicit agent loop** | You understand and control every step. Claude SDK is opaque. |
 | **Any LLM** | GPT, Gemini, DeepSeek, local models. Claude SDK is Claude-only. |
@@ -95,7 +95,7 @@ you implement everything.
 
 ---
 
-## py-pi-agent vs Pydantic AI
+## liteagent vs Pydantic AI
 
 [Pydantic AI](https://ai.pydantic.dev/) (~15k GitHub stars) is from the Pydantic team. Their pitch:
 "Bring that FastAPI feeling to GenAI app development." Type-safe, model-agnostic, production-grade.
@@ -103,7 +103,7 @@ you implement everything.
 ### Fundamental difference
 
 Pydantic AI agents are **declarative and stateless** — you define an `Agent[DepsType, OutputType]`,
-call `run()` with inputs, get a result back. py-pi-agent agents are **stateful** — they hold message
+call `run()` with inputs, get a result back. liteagent agents are **stateful** — they hold message
 history, streaming state, and queues. You interact via `prompt()`, `steer()`, `follow_up()`, `abort()`.
 Pydantic AI has no concept of steering or follow-ups.
 
@@ -125,7 +125,7 @@ Pydantic AI has no concept of steering or follow-ups.
 
 ### What we have that Pydantic AI doesn't
 
-| py-pi-agent feature | Why it matters |
+| liteagent feature | Why it matters |
 |---|---|
 | **Steering (mid-run interruption)** | User can redirect agent while it's executing tools. Pydantic AI has no equivalent — `run()` is fire-and-forget. |
 | **Follow-up messages** | Queue messages that wait until agent finishes. Pydantic AI doesn't support this. |
@@ -134,12 +134,12 @@ Pydantic AI has no concept of steering or follow-ups.
 | **Stateful agent** | Message history persists across calls. Pydantic AI requires passing `message_history=` manually each time. |
 | **Dual while-loop architecture** | Inner loop (tools + steering), outer loop (follow-ups). Enables complex interaction patterns. |
 | **Sequential tool execution** | Enables steering between tools. Pydantic AI tool execution model doesn't support interruption. |
-| **Minimal core** | ~300 lines of loop code. Pydantic AI is a large framework (thousands of lines). |
+| **Minimal core** | Small, hackable codebase (4 files). Pydantic AI is a large framework. |
 
 ### Different philosophies
 
 - **Pydantic AI**: "FastAPI for AI" — type-safe, batteries-included, production-grade, backed by VC-funded company. Optimized for structured output and observability. Declarative agents, stateless runs.
-- **py-pi-agent**: "Here's the core loop, bring your own everything" — minimal, stateful, hackable. Optimized for real-time interaction (steering, follow-ups, streaming). You understand every line.
+- **liteagent**: "Here's the core loop, bring your own everything" — minimal, stateful, hackable. Optimized for real-time interaction (steering, follow-ups, streaming). You understand every line.
 
 ### Ideas to steal from Pydantic AI
 
@@ -150,15 +150,15 @@ Pydantic AI has no concept of steering or follow-ups.
 
 ---
 
-## py-pi-agent vs pi-mono (our origin)
+## liteagent vs pi-mono (our origin)
 
-[pi-mono](https://github.com/badlogic/pi-mono) is the TypeScript agent framework py-pi-agent is ported
+[pi-mono](https://github.com/badlogic/pi-mono) is the TypeScript agent framework liteagent is ported
 from. Same author (pi/badlogic), battle-tested in production. This isn't a comparison of competitors —
 it's a comparison of the original and its Python translation.
 
 ### What we're faithfully porting
 
-| pi-mono pattern | py-pi-agent equivalent |
+| pi-mono pattern | liteagent equivalent |
 |---|---|
 | Dual while-loop (`runLoop()` in `agent-loop.ts`) | Same architecture in `loop.py` |
 | `EventStream<T, R>` async queue | `EventStream` in `stream.py` |
@@ -174,9 +174,9 @@ it's a comparison of the original and its Python translation.
 
 ### What we're doing differently
 
-| Difference | pi-mono (TypeScript) | py-pi-agent (Python) |
+| Difference | pi-mono (TypeScript) | liteagent (Python) |
 |---|---|---|
-| **LLM interface** | Hand-rolled providers (~6,800 lines across OpenAI, Anthropic, Google, etc.) | litellm — one `acompletion()` call handles all providers |
+| **LLM interface** | Hand-rolled providers (OpenAI, Anthropic, Google, etc.) | litellm — one `acompletion()` call handles all providers |
 | **Validation** | AJV (JSON Schema validation) | Pydantic — validates AND coerces types (e.g., `"42"` → `42`) |
 | **Proxy streaming** | Built-in proxy mode with bandwidth-optimized SSE reconstruction | Not needed — consumer handles transport |
 | **Session caching** | `sessionId` for provider-specific prompt cache hints | Not implementing — litellm handles this if needed |
@@ -187,10 +187,10 @@ it's a comparison of the original and its Python translation.
 
 ### Why litellm changes the game
 
-pi-mono's `packages/ai/` directory contains ~6,800 lines of provider-specific streaming code:
+pi-mono's `packages/ai/` directory contains thousands of lines of provider-specific streaming code:
 per-provider message conversion, chunk parsing, error handling, retry logic. All of that is replaced
-by a single litellm dependency in py-pi-agent. This is the biggest architectural simplification —
-it means our core loop can be ~300 lines instead of needing thousands of lines of provider glue.
+by a single litellm dependency in liteagent. This is the biggest architectural simplification —
+our core loop is compact instead of needing thousands of lines of provider glue.
 
 The tradeoff: we depend on litellm's correctness and maintenance. But litellm is actively maintained,
 widely used, and covers 100+ providers. The bet is worth it.
@@ -205,11 +205,51 @@ widely used, and covers 100+ providers. The bet is worth it.
 | `getApiKey` callback | litellm handles auth. Consumer can swap keys via litellm's API key config. |
 | Bandwidth-optimized delta reconstruction | Specific to browser streaming. Not relevant for Python library. |
 
+### Fidelity scorecard (March 2026)
+
+How close is our implementation to pi-mono's, component by component:
+
+| Component | Fidelity | Notes |
+|-----------|----------|-------|
+| **Dual while loop** | 99% | Structurally identical. Same control flow, same edge cases, same event ordering. |
+| **Tool execution** | 98% | Same sequential model, steering interrupt, skip semantics, argument validation. |
+| **Agent class** | 95% | All core methods. Missing pi-specific options (sessionId, streamFn, transport — see litellm section below). |
+| **Event system** | 95% | Same 10 event types, same ordering. Dict-based vs pi's typed unions. |
+| **Streaming** | 85% | Works, but we handle raw litellm chunks ourselves where pi delegates to pi-ai's parsed events. No injectable streamFn. |
+| **Type system** | 70% | Intentionally different — plain dicts vs pi's typed message classes. No `CustomAgentMessages` declaration merging. |
+| **EventStream** | 90% | Single-consumer (vs pi's multi-consumer). Fine — Agent class is the sole consumer; externals use subscribe(). |
+
+### What litellm already handles (pi features that aren't gaps)
+
+Pi builds several features into its streaming layer that litellm provides out of the box.
+These look like "missing features" when comparing code, but they're handled by our dependency:
+
+| Pi feature | litellm equivalent | Gap? |
+|---|---|---|
+| `getApiKey(provider)` — dynamic per-call API key for expiring OAuth tokens | `acompletion(api_key=...)` per call; also supports `api_key="os.environ/VAR"` for dynamic resolution | **No** — trivial to add if needed |
+| `thinkingBudgets` — custom token budgets per thinking level | `reasoning_effort` param mapped to provider-specific budgets automatically (Gemini → `thinkingBudget`, Anthropic → pass-through, OpenAI → pass-through) | **No** — already handled |
+| `maxRetryDelayMs` — cap on server-requested retry waits | Exponential backoff via tenacity with hardcoded 10s max. `num_retries` passed through. | **No** — already handled |
+| `transport` — SSE vs WebSocket selection | Not applicable — litellm uses httpx for all LLM calls. Transport is a pi/browser concept. | **N/A** |
+| Cost tracking | `litellm.include_cost_in_streaming_usage = True` + `completion_cost()`. Available, just not wired. | **Easy add** |
+| `sessionId` — provider-specific session caching (OpenAI Codex) | litellm doesn't pass session IDs to providers | **Minor gap** — only one provider uses it |
+| `streamFn` — injectable stream function for proxy backends | litellm already supports 100+ providers, custom base URLs, proxies | **Low priority** — reduced need |
+
+### Design decisions vs pi
+
+| Decision | Pi's approach | Our approach | Why |
+|---|---|---|---|
+| **Messages** | Typed union: `UserMessage \| AssistantMessage \| ToolResultMessage` + `CustomAgentMessages` via declaration merging | Plain dicts with `role` field | litellm speaks Chat Completions dicts. Typed classes would mean constant dict↔class conversion at the litellm boundary. Dicts are idiomatic for this layer. |
+| **EventStream consumers** | Multi-consumer via waiters array | Single-consumer `asyncio.Queue` | Agent class is the sole stream reader (same as pi in practice). External consumers use `subscribe()`. No need for multi-consumer complexity. |
+| **Streaming events** | Granular: `text_start`, `text_delta`, `text_end`, `thinking_start`/`delta`/`end`, `toolcall_start`/`delta`/`end` | Unified: `message_update` with `delta_type` field (`text_delta`, `thinking_delta`, `tool_call_delta`) | Same information, different shape. Pi's granularity is useful for its UI framework. Our consumers check `delta_type` instead — simpler, same expressiveness. |
+| **Usage shape** | `{input, output, cacheRead, cacheWrite, totalTokens, cost: {...}}` | `{prompt_tokens, completion_tokens, total_tokens, cache_read_tokens, cache_creation_tokens}` (litellm naming, no cost yet) | We use litellm's field names directly to avoid mapping. Cost can be added via `litellm.include_cost_in_streaming_usage`. |
+| **Model representation** | `Model<any>` object with id, name, api, provider, costs, context window, max tokens | Plain string (`"anthropic/claude-sonnet-4-6"`) | litellm resolves everything from the model string. Pi needs the object because it manages providers itself. |
+| **Validation** | AJV + TypeBox (JSON Schema compiler, strict mode off, type coercion) | Pydantic BaseModel (optional per tool) | Pydantic validates AND coerces natively. Same role as AJV — Python's equivalent. |
+
 ---
 
 ## Philosophy Comparison (all five)
 
-| | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | pi-mono | py-pi-agent |
+| | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | pi-mono | liteagent |
 |---|---|---|---|---|---|
 | **Approach** | Claude Code as a library | Multi-agent framework | "FastAPI for AI" | Production TS agent loop | Core Python agent loop |
 | **Agent loop** | Black box | Visible but managed | Internal (graph iteration available) | Fully explicit | Fully explicit (ported from pi-mono) |
@@ -220,4 +260,4 @@ widely used, and covers 100+ providers. The bet is worth it.
 | **Streaming tools** | None | None | None | `onUpdate` callback | `on_update` callback (ported) |
 | **Lock-in** | Claude | OpenAI | None (but large framework) | None | None |
 | **Target user** | "Claude Code in my app" | "Multi-agent system fast" | "Type-safe AI apps in production" | "Full control, production TS" | "Understand the loop, learn Python" |
-| **Size** | Medium | High | Large | ~3,300 lines (5 core files) | ~300 lines target (litellm does the rest) |
+| **Size** | Medium | High | Large | 5 core files | 4 core files (litellm does the rest) |

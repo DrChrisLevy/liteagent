@@ -11,6 +11,7 @@ Everything runs through `uv`. No bare `python`, `pip`, or `pytest`.
 ./dev test                     # run tests (skips @pytest.mark.slow)
 ./dev test -m slow             # run only slow tests (real API calls)
 ./dev test -m ""               # run ALL tests
+./dev test -n auto             # run tests in parallel (any combo works with -m, --cov, etc.)
 ./dev lint                     # ruff check --fix + ruff format
 uv run python script.py        # run a script
 uv add <package>               # add dependency
@@ -31,7 +32,7 @@ Run `./dev lint` before committing.
 
 ### Sources of truth
 - **`./SPEC.md`** — read this first. Architecture, contracts, event types, tool protocol, everything.
-- `../pi-mono/packages/agent/src/` — Pi core (5 files, ~3,300 lines). **The source of truth for behavior.** When in doubt, check the Pi source.
+- `../pi-mono/packages/agent/src/` — Pi core (5 files). **The source of truth for behavior.** When in doubt, check the Pi source.
   - `agent-loop.ts` — the dual loop
   - `agent.ts` — the Agent class wrapper
   - `types.ts` — all types and interfaces
@@ -39,13 +40,12 @@ Run `./dev lint` before committing.
 
 ### Reference
 - `../litellm/` — litellm source (cloned locally). Docs: https://docs.litellm.ai/
-- `../agents/agents/agent.py` — human's existing Python agent loop (~95 lines)
+- `../agents/agents/agent.py` — human's existing Python agent loop
 - Pi blogs: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ and https://lucumr.pocoo.org/2026/1/31/pi/
 
 ### Project docs
 - `PLAN.md` — how we work, build order, learning philosophy
-- `COMPARISONS.md` — how we differ from OpenAI SDK, Claude SDK
-- `CHANGELOG.md` — what changed and when
+- `COMPARISONS.md` — how we differ from OpenAI SDK, Claude SDK, Pydantic AI, pi-mono (includes fidelity scorecard + litellm gap analysis)
 
 ## Git & GitHub
 
@@ -60,9 +60,9 @@ Run `./dev lint` before committing.
 - **Control flow** (steering, follow-ups, error exits): fast tests, thin litellm mock
 - **Anything through litellm** (chunks, usage, stop reasons, thinking): live slow tests
 - Don't mock what you can test live. Mocks break silently when litellm changes.
-- Target models (must pass all five):
+- Target models (must pass all five, four currently active):
   - `anthropic/claude-opus-4-6`
   - `anthropic/claude-sonnet-4-6`
   - `gemini/gemini-3-flash-preview`
-  - `gemini/gemini-3.1-pro-preview`
+  - `gemini/gemini-3.1-pro-preview` *(disabled — consistently timing out since March 2026)*
   - `gpt-5.2`

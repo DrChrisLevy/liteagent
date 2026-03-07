@@ -1,4 +1,4 @@
-# py-pi-agent — WIP Spec
+# liteagent — Spec
 
 A Python core agent loop library inspired by [pi-mono](https://github.com/badlogic/pi-mono)'s `packages/agent`. Framework-agnostic, plug-and-play, usable from FastHTML, FastAPI, Slack, CLI, or anything else.
 
@@ -15,15 +15,26 @@ These are the models we test against and must work with:
 - `anthropic/claude-opus-4-6`
 - `anthropic/claude-sonnet-4-6`
 - `gemini/gemini-3-flash-preview`
-- `gemini/gemini-3.1-pro-preview`
+- `gemini/gemini-3.1-pro-preview` *(currently timing out — disabled in tests as of March 2026)*
 - `gpt-5.2`
 
-All use litellm model strings. Tests should pass against all five.
+All use litellm model strings. Tests should pass against all five (four active).
+
+## Implementation Status
+
+All four core modules are implemented and tested:
+
+| Module | Status |
+|--------|--------|
+| `stream.py` | Complete |
+| `types.py` | Complete |
+| `loop.py` | Complete (includes streaming chunk handling that replaces pi-ai's streaming layer) |
+| `agent.py` | Complete |
 
 ## Project Structure
 
 ```
-py_pi_agent/
+liteagent/
     __init__.py
     stream.py       # EventStream (async producer-consumer queue)
     types.py        # Event types, config, tool protocol, stop reasons
@@ -45,9 +56,13 @@ py_pi_agent/
 
 ## Key Design Decisions (and why)
 
-**Why litellm?** Pi built ~6,800 lines of provider-specific code (Anthropic, OpenAI, Google, Bedrock,
+**Why litellm?** Pi hand-rolls provider-specific code (Anthropic, OpenAI, Google, Bedrock,
 etc.) to normalize streaming, tool calls, and thinking traces across providers. litellm does the same
-thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that.
+thing as a maintained Python library. One `litellm.acompletion()` call replaces all of that. We also
+set `litellm.modify_params = True` which auto-fixes provider message format issues: inserting
+placeholder user messages for alternating-role providers, adding dummy tool definitions for orphaned
+tool calls, dropping thinking params when no thinking blocks are present, and sanitizing mismatched
+tool call/result pairs.
 
 **Provider boundary principle:** `loop.py` is provider-agnostic but boundary-defensive. No
 provider-specific control flow (`if anthropic:`, `if gemini:`) — but two kinds of leakage are
@@ -108,32 +123,53 @@ class EventStream:
 
 Built on `asyncio.Queue`. Events buffer in an unbounded queue if consumer is slow.
 
+**Single-consumer design:** Pi's `EventStream` supports multiple concurrent async iterators
+(via a waiters array). Ours uses a single `asyncio.Queue` — only one `async for` loop can
+consume it. This is intentional: the Agent class is the sole consumer of the loop's stream
+(same as pi in practice), and external consumers use `agent.subscribe()` callbacks instead.
+Multi-consumer support would add complexity for a pattern we don't use.
+
 ### Usage from any framework
 
+The Agent class uses `subscribe()` for event delivery (same as pi). Consumers subscribe
+a callback before calling `prompt()`. The raw loop functions (`agent_loop`) still return
+`EventStream` for direct `async for` usage — but the Agent class does not expose it.
+
 ```python
-from py_pi_agent import Agent
+from liteagent import Agent
 
-agent = Agent(model="claude-opus-4-6-20250219", tools=my_tools)
-stream = agent.prompt("Fix the bug in main.py")
+agent = Agent(model="anthropic/claude-sonnet-4-6", tools=my_tools)
 
-# FastHTML SSE endpoint
-async for event in stream:
-    yield sse(render_html(event))
+# Subscribe to events — this is the primary consumer API.
+# Subscribers are synchronous callbacks invoked during await prompt().
+agent.subscribe(my_event_handler)
+await agent.prompt("Fix the bug in main.py")
 
-# FastAPI WebSocket
-async for event in stream:
-    await ws.send_json(event)
+# FastHTML SSE — subscriber pushes to an async queue, SSE endpoint reads it
+event_queue = asyncio.Queue()
+agent.subscribe(lambda e: event_queue.put_nowait(e))
+asyncio.create_task(agent.prompt("Fix the bug in main.py"))
+# SSE endpoint drains event_queue
 
 # Slack bot
-async for event in stream:
+def handle(event):
     if event["type"] == "message_end" and event["message"]["role"] == "assistant":
         slack.post_message(event["message"]["content"])
+agent.subscribe(handle)
+await agent.prompt("Fix the bug in main.py")
 
 # CLI (rich/textual)
+def handle(event):
+    if event["type"] == "message_update" and event["delta_type"] == "text_delta":
+        print(event["delta"]["content"], end="", flush=True)
+agent.subscribe(handle)
+await agent.prompt("Fix the bug in main.py")
+
+# Direct loop access (no Agent, raw EventStream)
+from liteagent import agent_loop
+stream = agent_loop(prompts, context, config)
 async for event in stream:
-    if event["type"] == "message_update":
-        if event["delta_type"] == "text_delta":
-            console.print(event["delta"]["content"], end="")
+    print(event)
 ```
 
 ---
@@ -143,26 +179,45 @@ async for event in stream:
 Pi has two layers: the raw loop functions and a stateful `Agent` class on top.
 We do the same.
 
+**Message format adaptation:** Pi's `AgentMessage` uses content blocks (`[{type: "text", text: "..."}]`)
+and `role: "toolResult"`. We use Chat Completions format — bare strings for user content, `role: "tool"`
+for tool results — because that's what litellm speaks. The `convert_to_llm` hook bridges any custom
+message types to this format. This is an intentional adaptation, not a bug.
+
+**Intentionally omitted pi hooks:** Pi's Agent exposes `streamFn`, `sessionId`, `getApiKey`,
+`thinkingBudgets`, `transport`, and `maxRetryDelayMs`. We don't port these because litellm handles
+the equivalent concerns (provider routing, API keys via env vars, retry behavior). If needed later,
+they can be added to `AgentConfig` without changing the Agent class interface.
+
 ```python
 class Agent:
     """Stateful agent that wraps the core loop."""
 
-    def __init__(self, model, tools, system_prompt="", config=None):
+    def __init__(self, model, tools=None, system_prompt="",
+                 convert_to_llm=None, transform_context=None,
+                 steering_mode="one-at-a-time", follow_up_mode="one-at-a-time",
+                 max_tokens=None, temperature=None, num_retries=None):
         ...
 
-    # --- Primary actions ---
+    # --- Primary actions (both async — same as pi) ---
 
-    def prompt(self, message) -> EventStream:
-        """Send a message and start the agent loop. Returns event stream.
-        Throws if already streaming (use steer/follow_up instead)."""
+    async def prompt(self, message, images=None):
+        """Send a message and run the agent loop. Blocks until complete.
+        Throws if already streaming (use steer/follow_up instead).
+        Events delivered to subscribers during execution.
 
-    def continue_run(self) -> EventStream:
+        message: str, dict, or list[dict].
+        images: optional list of image content blocks (when message is str).
+        Same overload set as pi's prompt(input, images?).
+        """
+
+    async def continue_run(self):
         """Resume from current context (e.g., after error recovery).
         Throws if already streaming or no messages to continue from.
 
         Special case when last message is assistant (pi edge case):
         1. Check steering queue first — if messages, run with those
-           (skip initial steering poll in run_loop to avoid double-check)
+           (skipInitialSteeringPoll to avoid double-dequeue)
         2. Else check follow-up queue — if messages, run with those
         3. Else throw (can't continue from assistant without new input)
         """
@@ -186,8 +241,9 @@ class Agent:
         """Await until agent finishes current run."""
 
     def reset(self):
-        """Clear all messages, queues, and error state.
-        Does NOT reset model, tools, or system prompt."""
+        """Clear all state: messages, queues, error, is_streaming, stream_message,
+        pending_tool_calls. Does NOT reset model, tools, or system prompt.
+        Same as pi's reset()."""
 
     # --- Queue management ---
 
@@ -195,22 +251,35 @@ class Agent:
     def clear_follow_up_queue(self): ...
     def clear_all_queues(self): ...
     def has_queued_messages(self) -> bool: ...
+    def set_steering_mode(self, mode): ...   # "one-at-a-time" or "all"
+    def get_steering_mode(self) -> str: ...
+    def set_follow_up_mode(self, mode): ...
+    def get_follow_up_mode(self) -> str: ...
 
-    # --- Configuration ---
+    # --- Message history mutators (same as pi) ---
+
+    def replace_messages(self, messages): ...  # replace full history
+    def append_message(self, message): ...     # add one message
+    def clear_messages(self): ...              # clear history only (not queues/error)
+
+    # --- Configuration (no streaming guard — pi allows mid-run changes) ---
 
     def set_model(self, model): ...
     def set_system_prompt(self, prompt): ...
     def set_tools(self, tools): ...
     def set_thinking_level(self, level): ...
-    # All setters blocked while is_streaming. Changes take effect on next prompt()/continue_run().
-    # set_tools enables dynamic capabilities: permission escalation, plan-mode tool switching,
-    # preset configurations. Pi's coding agent uses this extensively with a tool registry pattern
-    # (all discovered tools + active subset). We provide the primitive; consumers build on it.
+    # No streaming guard. Pi allows calling these mid-run. The loop snapshots
+    # context at start, so mid-run changes only take effect on the next run.
+    # set_tools enables dynamic capabilities: permission escalation, plan-mode
+    # tool switching, preset configurations. We provide the primitive; consumers
+    # build on it.
 
-    # --- Event subscription ---
+    # --- Event subscription (primary consumer API) ---
 
     def subscribe(self, callback) -> Callable:
-        """Subscribe to agent events. Returns unsubscribe function."""
+        """Subscribe to agent events. Returns unsubscribe function.
+        This is how consumers get events — prompt() does not return a stream.
+        Same pattern as pi's agent.ts."""
 
     # --- State access ---
 
@@ -246,13 +315,14 @@ class AgentState:
 ### Concurrency Guard
 
 ```python
-def prompt(self, message) -> EventStream:
+async def prompt(self, message, images=None):
     if self.state.is_streaming:
         raise RuntimeError(
             "Agent is already processing. Use steer() or follow_up() "
             "to queue messages, or await wait_for_idle()."
         )
-    ...
+    # Build prompts from message/images (str, str+images, dict, list)
+    await self._run_loop(prompts)
 ```
 
 ### Steering & Follow-up Modes
@@ -266,71 +336,81 @@ agent.follow_up_mode = "one-at-a-time"
 
 ### Internal `_run_loop()` — how the Agent wires into the loop
 
-The Agent's internal method that connects everything. Same pattern as pi's `_runLoop()` in `agent.ts`.
+The Agent's internal method that connects everything. Same pattern as pi's `_runLoop()`
+in `agent.ts`. The Agent is the **sole reader** of the loop's EventStream — consumers
+get events via `subscribe()`, not by iterating the stream directly.
 
 ```python
-async def _run_loop(self, prompts=None):
+async def _run_loop(self, prompts=None, skip_initial_steering_poll=False):
     """Internal: create signal, build config, call loop, iterate events to update state."""
-    self._signal = asyncio.Event()  # fresh cancellation signal per run
+    self._signal = asyncio.Event()
     self._state.is_streaming = True
     self._state.error = None
-    self._running_future = asyncio.get_running_loop().create_future()  # for wait_for_idle()
+    self._running_future = asyncio.get_running_loop().create_future()
+
+    # skipInitialSteeringPoll: when continue_run() already dequeued steering,
+    # skip the first steering poll to avoid double-dequeue. Same as pi line 426-443.
+    _skip = skip_initial_steering_poll
+    def _steering_hook():
+        nonlocal _skip
+        if _skip:
+            _skip = False
+            return []
+        return self._dequeue_steering()
 
     try:
-        # Build AgentConfig — wire queues as hooks
         config = AgentConfig(
             model=self._state.model,
             convert_to_llm=self._convert_to_llm,
             transform_context=self._transform_context,
-            get_steering_messages=self._dequeue_steering,   # returns list or None
+            get_steering_messages=_steering_hook,
             get_follow_up_messages=self._dequeue_follow_ups,
             reasoning_effort=None if self._state.thinking_level == "off"
                              else self._state.thinking_level,
-            max_tokens=self._max_tokens,
-            temperature=self._temperature,
-            num_retries=self._num_retries,
+            ...
         )
 
-        # Snapshot context
         context = AgentContext(
             system_prompt=self._state.system_prompt,
-            messages=list(self._state.messages),  # shallow copy — loop appends to its own copy
+            messages=list(self._state.messages),
             tools=list(self._state.tools) if self._state.tools else None,
         )
 
-        # Call the appropriate loop entry point
         if prompts is not None:
             stream = agent_loop(prompts, context, config, self._signal)
         else:
             stream = agent_loop_continue(context, config, self._signal)
 
-        # Iterate events — update state + publish to subscribers
+        # Sole reader — iterate events, update state, emit to subscribers
         async for event in stream:
             self._handle_event(event)
             self._emit(event)
 
-        # After stream ends, update messages from result
-        new_messages = await stream.result()
-        self._state.messages.extend(new_messages)
+        # Post-stream partial handling (same as pi agent.ts line 504-518):
+        # If a partial assistant message remains after the stream ends, check
+        # if it has real content (non-empty text, thinking, or tool calls).
+        # If yes: append it. If only empty scaffolding after an abort: raise.
+        # This handles the edge case where streaming is interrupted mid-message.
 
     except Exception as e:
-        # Unhandled error — create synthetic error message
         error_msg = { ... }  # see Synthetic Error Messages section
         self._state.messages.append(error_msg)
         self._state.error = str(e)
+        self._emit({"type": "agent_end", "messages": [error_msg]})
 
     finally:
         self._state.is_streaming = False
         self._state.stream_message = None
         self._state.pending_tool_calls = set()
         self._signal = None
-        if not self._running_future.done():
-            self._running_future.set_result(None)  # unblock wait_for_idle()
+        if self._running_future and not self._running_future.done():
+            self._running_future.set_result(None)
 ```
 
 ### Event handling — updating state from events
 
-`_handle_event()` keeps `AgentState` in sync with the running loop:
+`_handle_event()` keeps `AgentState` in sync. Messages are appended on each
+`message_end` (not batched at stream completion). Same as pi's event loop.
 
 ```python
 def _handle_event(self, event):
@@ -342,10 +422,18 @@ def _handle_event(self, event):
         self._state.stream_message = event["message"]
     elif t == "message_end":
         self._state.stream_message = None
+        self._state.messages.append(event["message"])  # append incrementally
     elif t == "tool_execution_start":
         self._state.pending_tool_calls.add(event["tool_call_id"])
     elif t == "tool_execution_end":
         self._state.pending_tool_calls.discard(event["tool_call_id"])
+    elif t == "turn_end":
+        # Pi derives state.error from turn_end if the assistant message has an error
+        msg = event.get("message", {})
+        if msg.get("error_message"):
+            self._state.error = msg["error_message"]
+    elif t == "agent_end":
+        self._state.is_streaming = False
 ```
 
 ### Queue dequeuing — respects mode
@@ -353,7 +441,7 @@ def _handle_event(self, event):
 ```python
 def _dequeue_steering(self):
     if not self._steering_queue:
-        return None
+        return []
     if self.steering_mode == "all":
         msgs = list(self._steering_queue)
         self._steering_queue.clear()
@@ -364,18 +452,16 @@ def _dequeue_steering(self):
 # Same pattern for _dequeue_follow_ups
 ```
 
-### Partial message handling on abort
-
-Pi carefully checks whether a partial message has real content before appending.
-If the agent is aborted mid-stream, the stream may end with a partial message that has
-only whitespace or empty content. Skip these — don't pollute the message history.
-
 ### `convert_to_llm` default
 
-The Agent class provides a default `convert_to_llm` that filters to standard roles:
+The Agent class provides a default `convert_to_llm` that strips our extras and
+keeps LLM-compatible fields:
 ```python
 def _default_convert_to_llm(messages):
-    return [m for m in messages if m.get("role") in ("user", "assistant", "tool")]
+    # assistant: keep role/content/tool_calls/thinking_blocks/reasoning_content
+    # user: keep role/content
+    # tool: keep role/tool_call_id/content (flatten content blocks to string)
+    # Strips: usage, stop_reason, timestamp, details, is_error, provider_specific_fields
 ```
 Consumers override this for custom message types or provider-specific workarounds
 (e.g., OpenAI multimodal tool results).
@@ -954,10 +1040,10 @@ All decided:
 - ~~jsonschema vs Pydantic~~ → Pydantic
 - ~~EventStream implementation~~ → `asyncio.Queue` for event buffer + `asyncio.Future` for final result + `__aiter__` for consumers. Matches pi's pattern (queue + waiting callbacks + Promise).
 - ~~Events format~~ → Plain dicts. Match litellm's format, trivial JSON serialization, no parallel type system. Same as pi (plain objects).
-- ~~Subscribe pattern~~ → Both `async for` AND `subscribe()`. Same as pi. `async for` is the primary consumer API. `subscribe()` is used by the Agent class internally to update state from events.
+- ~~Subscribe pattern~~ → `subscribe()` is the Agent's consumer API (same as pi). `async for` on raw `EventStream` is for direct loop usage. The Agent does not return streams from `prompt()` — it is the sole reader of the loop's stream and emits to subscribers.
 - ~~Abort propagation~~ → Check `signal.is_set()` between streaming chunks from litellm. If set, break out of the chunk loop, build a partial message with `stop_reason="aborted"`. For tool execution, tools already receive the signal. Behavior contract: abort → stop_reason="aborted", cleanup runs, agent_end emitted.
 - ~~Testing strategy~~ → Real API calls for integration tests (Phase 2). Unit tests for EventStream/types need no LLM. Mock only for error paths hard to trigger with real APIs.
-- ~~Package name~~ → `py_pi_agent` (directory) / `py-pi-agent` (package). Already in pyproject.toml.
+- ~~Package name~~ → `liteagent` (directory) / `liteagent` (package). Already in pyproject.toml.
 - ~~@tool decorator~~ → Phase 4. `params_model` stays optional — tools can provide just JSON Schema (no Pydantic model required). Decorator will auto-generate both from type hints later.
 
 ---
@@ -1021,7 +1107,7 @@ Features pi has that we intentionally skip, and why:
 | Declaration merging for custom messages | TS-specific pattern | No — Python has simpler extensibility |
 | ThinkingBudgets (per-level token limits) | litellm maps reasoning_effort → provider budgets internally (Anthropic: budget_tokens, Gemini: thinkingBudget) | No — confirmed litellm handles it |
 | getApiKey hook | Dynamic API key resolution per LLM call (e.g., expiring OAuth tokens). litellm has its own key management for now | Maybe later if OAuth rotation needed |
-| Built-in provider implementations | litellm replaces all 6,800 lines | No |
+| Built-in provider implementations | litellm replaces all of pi's provider code | No |
 | TUI / Web UI | Consumer's problem | No |
 | Built-in tools | Consumer's problem | No |
 | Cross-model thinking conversion | Switching models mid-conversation leaves orphaned thinking blocks; `transform_context` hook can strip them if needed | Only if it causes real issues |
@@ -1032,7 +1118,7 @@ See [COMPARISONS.md](COMPARISONS.md) for detailed comparisons with OpenAI Agents
 
 ## Test Runner
 
-A stripped-down interactive agent — the first real consumer of py-pi-agent. Inspired by
+A stripped-down interactive agent — the first real consumer of liteagent. Inspired by
 pi's coding-agent but minimal. Runs in the terminal, exercises every feature of the core loop.
 
 ### Structure
@@ -1162,7 +1248,7 @@ async def always_fail(tool_call_id, params, signal=None, on_update=None):
 ### System prompt (for test runner)
 
 ```
-You are a test agent for the py-pi-agent library. You have these tools:
+You are a test agent for the liteagent library. You have these tools:
 
 - echo: Echo back a message. Use for simple tests.
 - bash: Run shell commands. Output streams line by line.

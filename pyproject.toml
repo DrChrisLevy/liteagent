@@ -1,5 +1,5 @@
 [project]
-name = "py-pi-agent"
+name = "liteagent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -17,6 +17,7 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.2",
     "seaborn>=0.13.2",
 ]
@@ -25,3 +26,6 @@ dev = [
 asyncio_mode = "auto"
 markers = ["slow: real API calls (skip by default, run with -m slow)"]
 timeout = 60
+
+[tool.coverage.run]
+omit = ["learnings/*"]

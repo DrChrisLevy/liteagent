@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from pydantic import BaseModel
 
-from py_pi_agent.loop import (
+from liteagent.loop import (
     _build_tool_result_message,
     _extract_usage,
     _maybe_await,
@@ -26,8 +26,8 @@ from py_pi_agent.loop import (
     run_loop,
     stream_llm_response,
 )
-from py_pi_agent.stream import EventStream
-from py_pi_agent.types import AgentConfig, AgentContext, Tool, ToolResult
+from liteagent.stream import EventStream
+from liteagent.types import AgentConfig, AgentContext, Tool, ToolResult
 
 # ── Target models ──────────────────────────────────────────────────────────
 
@@ -341,9 +341,9 @@ def mock_llm(monkeypatch):
             captured.update(kwargs)
             return async_iter(chunks)
 
-        monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", fake_acompletion)
+        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
         monkeypatch.setattr(
-            "py_pi_agent.loop.litellm.stream_chunk_builder", lambda _: final
+            "liteagent.loop.litellm.stream_chunk_builder", lambda _: final
         )
         return captured
 
@@ -361,9 +361,9 @@ def mock_llm_seq(monkeypatch):
         async def fake_acompletion(**kwargs):
             return async_iter(remaining_chunks.pop(0))
 
-        monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", fake_acompletion)
+        monkeypatch.setattr("liteagent.loop.litellm.acompletion", fake_acompletion)
         monkeypatch.setattr(
-            "py_pi_agent.loop.litellm.stream_chunk_builder",
+            "liteagent.loop.litellm.stream_chunk_builder",
             lambda _: remaining_finals.pop(0),
         )
 
@@ -529,6 +529,25 @@ async def test_execute_tool_raises():
 
     assert result["tool_results"][0]["is_error"] is True
     assert "kaboom" in result["tool_results"][0]["content"][0]["text"]
+
+
+async def test_execute_tool_error_details_is_dict():
+    """Error-path ToolResult must have details={}, not None (matches pi-mono)."""
+
+    async def boom(tool_call_id, params, signal=None, on_update=None):
+        raise RuntimeError("kaboom")
+
+    stream = EventStream()
+    tool = _simple_tool("boom", boom)
+    assistant = _tc_msg([("boom", {})])
+    await execute_tool_calls([tool], assistant, None, stream, None)
+    stream.end()
+
+    events = await collect_events(stream)
+    end_event = [e for e in events if e["type"] == "tool_execution_end"][0]
+    assert end_event["result"]["details"] == {}, (
+        f"Expected details={{}}, got details={end_event['result']['details']}"
+    )
 
 
 async def test_execute_multiple_sequential():
@@ -794,7 +813,7 @@ async def test_stream_exception(mock_llm, monkeypatch):
     async def explode(**kwargs):
         raise RuntimeError("LLM down")
 
-    monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", explode)
+    monkeypatch.setattr("liteagent.loop.litellm.acompletion", explode)
     ctx = make_context(messages=[{"role": "user", "content": "hi"}])
     stream = EventStream()
     msg = await stream_llm_response(ctx, make_config(), None, stream)
@@ -944,7 +963,7 @@ async def test_run_loop_error_exits(mock_llm, monkeypatch):
     async def explode(**kwargs):
         raise RuntimeError("LLM down")
 
-    monkeypatch.setattr("py_pi_agent.loop.litellm.acompletion", explode)
+    monkeypatch.setattr("liteagent.loop.litellm.acompletion", explode)
     ctx = make_context(messages=[{"role": "user", "content": "hi"}])
     stream = EventStream()
     new_msgs = []
@@ -1231,7 +1250,7 @@ async def test_agent_loop_safety_net(monkeypatch):
     async def explode(*args, **kwargs):
         raise TypeError("internal bug")
 
-    monkeypatch.setattr("py_pi_agent.loop.run_loop", explode)
+    monkeypatch.setattr("liteagent.loop.run_loop", explode)
     ctx = make_context()
     user_msg = {"role": "user", "content": "hi", "timestamp": 0}
     stream = agent_loop([user_msg], ctx, make_config())
@@ -1364,7 +1383,7 @@ async def test_agent_loop_continue_safety_net(monkeypatch):
     async def explode(*args, **kwargs):
         raise TypeError("internal bug")
 
-    monkeypatch.setattr("py_pi_agent.loop.run_loop", explode)
+    monkeypatch.setattr("liteagent.loop.run_loop", explode)
     ctx = make_context(messages=[{"role": "user", "content": "hi", "timestamp": 0}])
     stream = agent_loop_continue(ctx, make_config())
     events = await collect_events(stream)
@@ -1848,13 +1867,25 @@ async def test_skip_tool_call_args_are_parsed_dict():
     assert events[0]["args"] == {"cmd": "ls"}
 
 
+async def test_skip_tool_call_malformed_json_args():
+    """_skip_tool_call with invalid JSON string args falls back to raw string."""
+    stream = EventStream()
+    tc = {"id": "call_0", "function": {"name": "bash", "arguments": "not valid json{"}}
+    _skip_tool_call(tc, stream)
+    stream.end()
+    events = await collect_events(stream)
+
+    # Should fall through to the raw string (JSON parse failed)
+    assert events[0]["args"] == "not valid json{"
+
+
 async def test_safety_net_error_message_has_all_keys(monkeypatch):
     """Safety net error_msg must include tool_calls, thinking_blocks, reasoning_content."""
 
     async def explode(*args, **kwargs):
         raise TypeError("internal bug")
 
-    monkeypatch.setattr("py_pi_agent.loop.run_loop", explode)
+    monkeypatch.setattr("liteagent.loop.run_loop", explode)
     ctx = make_context()
     user_msg = {"role": "user", "content": "hi", "timestamp": 0}
     stream = agent_loop([user_msg], ctx, make_config())
@@ -1873,7 +1904,7 @@ async def test_cancelled_error_ends_stream(monkeypatch):
     async def raise_cancelled(*args, **kwargs):
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr("py_pi_agent.loop.run_loop", raise_cancelled)
+    monkeypatch.setattr("liteagent.loop.run_loop", raise_cancelled)
     ctx = make_context()
     user_msg = {"role": "user", "content": "hi", "timestamp": 0}
     stream = agent_loop([user_msg], ctx, make_config())

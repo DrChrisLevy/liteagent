@@ -198,7 +198,7 @@ async def execute_tool_calls(
                 tc_id, validated_args, signal, _make_on_update(tc_id, tc_name, raw_args)
             )
         except Exception as e:
-            result = ToolResult(content=[{"type": "text", "text": str(e)}])
+            result = ToolResult(content=[{"type": "text", "text": str(e)}], details={})
             is_error = True
 
         stream.push(
@@ -426,6 +426,7 @@ async def stream_llm_response(context, config, signal, stream):
             "tool_calls": None,
             "thinking_blocks": None,
             "reasoning_content": None,
+            "model": config.model,
             "usage": _extract_usage(None),
             "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
             "error_message": str(e),
@@ -622,6 +623,7 @@ def agent_loop(prompts, context, config, signal=None):
                 "tool_calls": None,
                 "thinking_blocks": None,
                 "reasoning_content": None,
+                "model": config.model,
                 "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
                 "error_message": str(e),
                 "usage": _extract_usage(None),
@@ -665,6 +667,7 @@ def agent_loop_continue(context, config, signal=None):
                 "tool_calls": None,
                 "thinking_blocks": None,
                 "reasoning_content": None,
+                "model": config.model,
                 "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
                 "error_message": str(e),
                 "usage": _extract_usage(None),

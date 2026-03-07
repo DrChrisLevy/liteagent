@@ -1,7 +1,7 @@
 """
 EventStream — async producer-consumer queue.
 
-This is the foundation of py-pi-agent. The agent loop pushes events,
+This is the foundation of liteagent. The agent loop pushes events,
 consumers iterate over them with `async for`.
 
 Play with this in ipython:

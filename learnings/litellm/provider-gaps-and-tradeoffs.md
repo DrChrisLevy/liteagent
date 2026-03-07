@@ -176,8 +176,8 @@ These are safe to depend on across all providers:
 
 ## How pi handles this differently
 
-Pi has ~6,820 lines of hand-rolled provider code in `packages/ai/src/providers/`.
-Each provider (Anthropic 880 lines, Google 940, OpenAI 824, Bedrock 739, etc.)
+Pi has extensive hand-rolled provider code in `packages/ai/src/providers/`.
+Each provider (Anthropic, Google, OpenAI, Bedrock, etc.)
 maps raw API responses into pi's unified message types.
 
 The key insight: **pi promotes every provider-specific field into a typed,
@@ -213,7 +213,7 @@ interface Usage {
 }
 ```
 
-Because the types carry everything, `agent-loop.ts` (417 lines) never worries
+Because the types carry everything, `agent-loop.ts` never worries
 about dropping provider metadata. `convertToLlm` knows exactly where to find
 each field.
 
@@ -221,9 +221,9 @@ each field.
 
 | | Pi | Us (litellm) |
 |---|---|---|
-| Provider code | ~6,820 lines | 0 lines |
+| Provider code | Thousands of lines | 0 lines |
 | Provider-specific bugs | Never — types are exhaustive | Periodic — litellm leaks |
-| Adding a provider | ~500-900 lines per provider | Change one model string |
+| Adding a provider | Hundreds of lines per provider | Change one model string |
 | Cache tokens | Normalized to `cacheRead`/`cacheWrite` | Different locations per provider |
 | Thought signatures | `thoughtSignature` on ToolCall | `provider_specific_fields` bag |
 | Maintenance | Update when APIs change | Update when litellm changes |
@@ -235,7 +235,7 @@ silent data loss we need to discover and fix.
 ## Future option
 
 Consider a thin provider layer for just our 3 target providers (Anthropic,
-Google, OpenAI). Doesn't need to be 6,800 lines — pi supports ~20 providers
+Google, OpenAI). Doesn't need to be thousands of lines — pi supports ~20 providers
 with OAuth, transports, compat flags. A focused layer for 3 providers could
 be much smaller, while giving us pi's guarantees: typed fields, no escape
 hatches, no silent data loss.
