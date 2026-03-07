@@ -198,7 +198,7 @@ async def execute_tool_calls(
                 tc_id, validated_args, signal, _make_on_update(tc_id, tc_name, raw_args)
             )
         except Exception as e:
-            result = ToolResult(content=[{"type": "text", "text": str(e)}])
+            result = ToolResult(content=[{"type": "text", "text": str(e)}], details={})
             is_error = True
 
         stream.push(

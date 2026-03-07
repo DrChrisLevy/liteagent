@@ -531,6 +531,25 @@ async def test_execute_tool_raises():
     assert "kaboom" in result["tool_results"][0]["content"][0]["text"]
 
 
+async def test_execute_tool_error_details_is_dict():
+    """Error-path ToolResult must have details={}, not None (matches pi-mono)."""
+
+    async def boom(tool_call_id, params, signal=None, on_update=None):
+        raise RuntimeError("kaboom")
+
+    stream = EventStream()
+    tool = _simple_tool("boom", boom)
+    assistant = _tc_msg([("boom", {})])
+    await execute_tool_calls([tool], assistant, None, stream, None)
+    stream.end()
+
+    events = await collect_events(stream)
+    end_event = [e for e in events if e["type"] == "tool_execution_end"][0]
+    assert end_event["result"]["details"] == {}, (
+        f"Expected details={{}}, got details={end_event['result']['details']}"
+    )
+
+
 async def test_execute_multiple_sequential():
     order = []
 
