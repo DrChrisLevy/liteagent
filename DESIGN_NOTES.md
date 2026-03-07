@@ -242,4 +242,3 @@ If these disagree, use this order:
 ## Related Docs
 
 - `learnings/COMPARISONS.md` — how liteagent compares to OpenAI Agents SDK, Claude Agent SDK, and Pydantic AI
-- `learnings/` notebooks — exploratory research and experiments
