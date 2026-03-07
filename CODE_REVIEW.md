@@ -1,152 +1,181 @@
-# Code Review: liteagent
+# Code Review Tracker: liteagent
 
-## What I'd fix
+This file tracks review findings against two baselines:
 
-### 1. Messages are untyped dicts — this is the project's biggest weakness
+- `../pi-mono/packages/agent/src/` for intended behavior parity
+- `DESIGN_NOTES.md` for documented local differences and intended boundaries
 
-Every message in the system is a raw `dict`. Assistant messages are constructed in at least 6 places:
+The point of this file is triage, not prose. If a behavior is already documented in
+the spec, mark it as a `sharp-edge` or `backlog` item instead of pretending it is
+an undiscovered bug.
 
-- `loop.py:423-434` (error in stream_llm_response)
-- `loop.py:443-452` (empty chunks fallback)
-- `loop.py:481-491` (normal assistant message)
-- `loop.py:620-632` (agent_loop safety net)
-- `loop.py:663-675` (agent_loop_continue safety net)
-- `agent.py:366-385` (Agent._run_loop error handler)
+## Legend
 
-Each is a ~10-key dict literal with `role`, `content`, `tool_calls`, `thinking_blocks`, `reasoning_content`, `usage`, `stop_reason`, `timestamp`, etc. They're almost identical but not quite. One typo — `"reasoning_contnet"` — and you get a silent bug that passes all tests because `dict.get()` just returns `None`.
+- `open`: likely worth fixing now
+- `sharp-edge`: current behavior is documented, but the default is still risky or misleading
+- `backlog`: real design debt, not a correctness failure
 
-Pi-mono avoids this with TypeScript types (`AssistantMessage`, `ToolResultMessage`). You already have dataclasses in `types.py`. Use them. A `_make_assistant_msg()` factory or an `AssistantMessage` dataclass would eliminate an entire class of bugs.
+Priority:
 
-### 2. `_default_convert_to_llm` silently drops images from tool results
+- `P1`: correctness or cancellation gap
+- `P2`: target-model fidelity or user-visible behavior gap
+- `P3`: maintainability / DX
 
-```python
-text_parts = [b["text"] for b in content if b.get("type") == "text"]
-content = "\n".join(text_parts)
-```
+## Active Summary
 
-Any `image_url` blocks in tool results are silently discarded. The test suite's `make_convert_to_llm` (in `test_loop.py`) handles images correctly — it even handles the OpenAI-specific workaround of shuffling images into a synthetic user message. But the default converter shipped with the library doesn't.
+| ID | Priority | Status | Summary |
+|---|---|---|---|
+| `CR-001` | `P1` | `open` | Abort cannot interrupt a pending LLM startup await |
+| `CR-002` | `P2` | `open` | Default Agent converter drops Gemini `thought_signatures` |
+| `CR-003` | `P2` | `sharp-edge` | Default Agent converter drops tool-result images |
+| `CR-004` | `P2` | `open` | Usage extraction misses nested `cache_creation_tokens` |
+| `CR-005` | `P3` | `backlog` | Messages are still untyped dicts throughout the core loop |
+| `CR-006` | `P3` | `backlog` | Agent and loop both append messages, relying on copied lists |
 
-A user doing `Agent(model="anthropic/claude-sonnet-4-6")` with a tool that returns images will lose those images silently. This should either handle images, or at minimum log a warning.
+## Active Findings
 
-### 3. `_default_convert_to_llm` also drops `provider_specific_fields`
+### `CR-001` Abort cannot interrupt pending LLM startup
 
-The default converter preserves `thinking_blocks` and `reasoning_content` on
-assistant messages, but it strips `provider_specific_fields`.
+- Priority: `P1`
+- Status: `open`
+- Type: parity gap vs `pi-mono`
+- liteagent:
+  - `liteagent/loop.py:294-299`
+- pi-mono baseline:
+  - `../pi-mono/packages/agent/src/agent-loop.ts:233-237`
+- Design notes:
+  - `DESIGN_NOTES.md` sections `What We Deliberately Change` and `Provider Boundary Principle`
+- Why this matters:
+  - `agent.abort()` only flips an `asyncio.Event`.
+  - `stream_llm_response()` does not consult that signal until after `await litellm.acompletion(**kwargs)` returns.
+  - If provider startup is slow, rate-limited, or hung, the run stays busy even though the user already aborted.
+- Why `pi-mono` is different:
+  - `pi-mono` passes an `AbortSignal` into the provider stream function itself, so the request can be interrupted while startup is still pending.
+- Suggested fix:
+  - Make the LLM startup await cancellable, either by racing `acompletion()` against the signal or by wrapping the provider call in a task that can be cancelled safely.
+- Tests to add:
+  - pending `acompletion()` + pre-set signal => immediate `aborted`
+  - pending `acompletion()` + mid-await `abort()` => run resolves without waiting for first chunk
 
-That matters for Gemini. litellm stores Gemini `thought_signatures` inside
-`provider_specific_fields`, and those signatures are part of the multi-turn
-thinking fidelity story documented elsewhere in the repo. The raw loop preserves
-them. The default `Agent` path drops them unless the caller knows to supply a
-custom `convert_to_llm`.
+### `CR-002` Default Agent converter drops Gemini `thought_signatures`
 
-The current slow tests prove that `provider_specific_fields` survive through the
-loop, but they do not prove the default Agent converter preserves them.
+- Priority: `P2`
+- Status: `open`
+- Type: fidelity gap with a doc conflict
+- liteagent:
+  - `liteagent/agent.py:45-55`
+- pi-mono baseline:
+  - `../pi-mono/packages/agent/src/agent.ts:31-33`
+- Design notes:
+  - `DESIGN_NOTES.md` sections `Known LiteLLM-Driven Differences` and `Provider Boundary Principle`
+- Why this matters:
+  - The default converter preserves `thinking_blocks` and `reasoning_content`, but strips `provider_specific_fields`.
+  - Gemini stores `thought_signatures` in `provider_specific_fields`.
+  - The raw loop preserves them, but the default `Agent` path loses them unless the caller overrides `convert_to_llm`.
+- Why this is not just a nit:
+  - The provider notes explicitly say those signatures matter for multi-turn thinking fidelity.
+  - The spec's default-converter section documents the current stripping behavior, but the provider notes point the other way. That is a doc conflict worth resolving, not just a taste issue.
+- Suggested fix:
+  - Preserve `provider_specific_fields` on assistant messages in the default converter, or ship a provider-aware default converter.
+- Tests to add:
+  - default Agent converter round-trip preserves Gemini-style `provider_specific_fields`
 
-### 4. Abort cannot interrupt a slow `litellm.acompletion()` await
+### `CR-003` Default Agent converter drops tool-result images
 
-`Agent.abort()` sets an `asyncio.Event`, and `stream_llm_response()` checks that
-signal while iterating chunks. But it does **not** check the signal until after:
+- Priority: `P2`
+- Status: `sharp-edge`
+- Type: documented difference that weakens the default API
+- liteagent:
+  - `liteagent/agent.py:58-68`
+- pi-mono baseline:
+  - `../pi-mono/packages/agent/src/agent.ts:31-33`
+- Design notes:
+  - `DESIGN_NOTES.md` section `Known LiteLLM-Driven Differences`
+- Why this matters:
+  - Tool results with mixed `text` + `image_url` content are flattened to text in the default converter.
+  - Anthropic and Gemini can consume tool-result images, so multimodal tools lose information on the default Agent path.
+- Why this is `sharp-edge`, not `open`:
+  - The spec already documents the default converter as minimal and says consumers can override it for provider-specific multimodal behavior.
+  - So this is not hidden behavior. It is still a bad default for a library that otherwise supports multimodal tool results.
+- Suggested fix:
+  - Either preserve `image_url` for providers that support it, or make the default converter provider-aware and apply the OpenAI workaround automatically.
+- Tests to add:
+  - default converter image behavior for Anthropic / Gemini expectations
+  - default converter OpenAI fallback behavior if provider-aware conversion is added
 
-```python
-response = await litellm.acompletion(**kwargs)
-```
+### `CR-004` Usage extraction misses nested `cache_creation_tokens`
 
-That means abort only works once the provider has already returned a streaming
-response object. If the provider call itself is slow, rate-limited, or hung,
-the agent stays busy even though the user already aborted.
+- Priority: `P2`
+- Status: `open`
+- Type: accounting bug at the LiteLLM boundary
+- liteagent:
+  - `liteagent/loop.py:53-61`
+- Design notes:
+  - `DESIGN_NOTES.md` section `Known LiteLLM-Driven Differences`
+- Why this matters:
+  - `_extract_usage()` reads top-level `cache_creation_input_tokens`, but not nested `usage.prompt_tokens_details.cache_creation_tokens`.
+  - When LiteLLM uses the nested shape, cache-write accounting is under-reported even though the data exists.
+- pi-mono note:
+  - This is not a direct `pi-mono` parity issue. `pi-mono` normalizes usage upstream into a stable shape, so this specific boundary bug does not exist there.
+- Suggested fix:
+  - Fall back to `usage.prompt_tokens_details.cache_creation_tokens` when the top-level field is absent.
+- Tests to add:
+  - helper coverage for nested `cache_creation_tokens`
 
-The tests around abort are good, but the coverage currently stops short of this
-specific edge: "abort before first chunk arrives, while `acompletion()` itself is
-still pending." That's the real hole.
+## Backlog
 
-### 5. `_extract_usage()` misses nested `cache_creation_tokens`
+### `CR-005` Messages are still untyped dicts
 
-`_extract_usage()` reads:
+- Priority: `P3`
+- Status: `backlog`
+- Type: maintainability debt vs `pi-mono`
+- liteagent:
+  - assistant messages are hand-built in multiple places in `liteagent/loop.py` and `liteagent/agent.py`
+- pi-mono baseline:
+  - typed message unions in `../pi-mono/packages/agent/src/types.ts`
+- Why this matters:
+  - The code repeatedly constructs near-identical assistant-message dicts with `role`, `content`, `tool_calls`, `thinking_blocks`, `reasoning_content`, `usage`, `stop_reason`, and `timestamp`.
+  - A typo or omitted field becomes a silent `dict.get()` failure instead of a type error.
+- Suggested fix:
+  - Add a shared assistant-message factory first.
+  - Consider a lightweight typed message layer after that if the codebase keeps growing.
 
-- Anthropic-style top-level `cache_creation_input_tokens`
-- OpenAI-style nested `prompt_tokens_details.cached_tokens`
+### `CR-006` Message accumulation is coupled across Agent and loop
 
-But it does **not** read nested
-`usage.prompt_tokens_details.cache_creation_tokens`, which litellm also exposes.
-So cache-write accounting is incomplete for providers that use the nested shape.
+- Priority: `P3`
+- Status: `backlog`
+- Type: design risk
+- liteagent:
+  - `liteagent/agent.py:328-331`
+  - `liteagent/agent.py:407-409`
+  - `liteagent/loop.py:497`
+  - `liteagent/loop.py:560-561`
+- Design notes:
+  - `DESIGN_NOTES.md` section `Architecture`
+- Why this matters:
+  - The loop appends to its local context, and the Agent also appends on every `message_end`.
+  - This is safe today because the Agent snapshots message history into a copied list before the run starts.
+  - If that copy disappears later, message accumulation will become subtly wrong.
+- Why this is not an active bug:
+  - The copy is intentional and documented in the spec.
+  - So current behavior is correct; the problem is that the ownership boundary is easy to break during refactors.
+- Suggested fix:
+  - Make ownership explicit in code comments or consolidate message accumulation behind one layer.
 
-This is not catastrophic, but it does mean usage metadata can under-report
-cache creation even when litellm has the data.
+## Low-Value Cleanup
 
-### 6. `_now_ms()` is duplicated
+These are real but not worth mixing into the active bug list:
 
-Defined identically in `loop.py:33` and `agent.py:17`. It's one line (`int(time.time() * 1000)`) so it's not a big deal, but it's the kind of thing that signals "these files were written separately and never cleaned up." Put it in a shared spot or just inline it.
+- `_now_ms()` is duplicated in `liteagent/loop.py` and `liteagent/agent.py`
+- `_dequeue_steering()` / `_dequeue_follow_ups()` use `list.pop(0)` instead of `deque`
+- dataclass `__repr__` output is noisy for debugging
+- the test mock helpers are duplicated between `tests/test_loop.py` and `tests/test_agent.py`
 
-### 7. `_dequeue_steering` / `_dequeue_follow_ups` use `list.pop(0)`
+## Focused Test Gaps
 
-```python
-return [self._steering_queue.pop(0)]
-```
+If adding tests next, do these first:
 
-`pop(0)` on a Python list is O(n) — it shifts every element. Use `collections.deque` with `popleft()`. In practice, steering queues are tiny so this doesn't matter. But it's a code smell.
-
-### 8. `_handle_event` double-appends messages
-
-The Agent's `_handle_event` does `self._state.messages.append(event["message"])` on every `message_end` event. But `run_loop` already appends to `context.messages` inside the loop. These are different lists (because of the `list()` copy at `agent.py:330`), so it works — but only because of that shallow copy. The Agent and the loop each think they own message accumulation. This is fragile coupling. If someone removes the `list()` copy, messages get double-appended.
-
-### 9. No `__repr__` on dataclasses
-
-`AgentState` will dump the entire message history when printed. `Tool` will dump its full JSON schema. `AgentConfig` will dump the convert_to_llm function object. This makes debugging painful. Even a simple `__repr__` that shows just the class name and key fields would help.
-
-### 10. The mock infrastructure is duplicated across test files
-
-`_Obj`, `make_delta`, `make_chunk`, `make_final`, `async_iter`, `mock_llm`, `mock_llm_seq` are copy-pasted between `test_loop.py` and `test_agent.py`. They're identical. Extract to a `tests/conftest.py` or `tests/helpers.py`.
-
----
-
-## Architectural fidelity to pi-mono
-
-The port is faithful. The important stuff is all there:
-
-- Dual while loop (inner: tool calls + steering, outer: follow-ups) — matches pi's `runLoop`
-- Sequential tool execution with steering checks after each tool
-- `skipToolCall` pattern for remaining tools when steering arrives
-- `skipInitialSteeringPoll` to avoid double-dequeue in `continue_run` — matches pi's `agent.ts:426-443`
-- `agent_loop` vs `agent_loop_continue` entry points — matches pi's `agentLoop` / `agentLoopContinue`
-- Agent state management (stream_message, pending_tool_calls, is_streaming, error) tracks events identically
-- Partial preservation on abort — checks for real content vs empty scaffold, same as pi's `agent.ts:504-518`
-
-The divergences are deliberate and well-reasoned:
-- litellm replaces pi-ai's entire streaming/provider layer
-- `asyncio.Event` replaces `AbortController` (correct Python equivalent)
-- `asyncio.Future` replaces Promise-based `runningPrompt`
-- Pydantic replaces AJV for tool argument validation
-- `convert_to_llm` takes plain dicts instead of typed messages (consequence of the untyped-messages approach)
-
----
-
-## Is it AI slop?
-
-**No.** Several things tell me a human with real understanding wrote this:
-
-1. **The litellm bug workarounds are real.** The `chunk_finish_reason` capture, the `xfail` tests with specific bug descriptions, the `litellm.modify_params = True` line — these come from actually hitting problems, not from reading docs.
-
-2. **The `_make_on_update` closure factory** in `execute_tool_calls` (loop.py:180-195) exists because of a genuine Python closure bug — loop variables captured by reference, not by value. An AI would either miss this or over-explain it.
-
-3. **The thinking blocks dedup logic** (`if not delta_rc:` guard at loop.py:355) exists because Anthropic sometimes sends both `reasoning_content` and `thinking_blocks` on the same chunk. You only know this from testing against the real API.
-
-4. **The slow tests are not synthetic.** The multimodal spike test generates a real chart with matplotlib, uses randomized spike placement, and verifies the LLM can identify it. The Gemini `provider_specific_fields` test checks for `thought_signatures` — you'd only know about these from actually working with Gemini thinking mode.
-
-5. **The commit history tells a story.** EventStream first, then types, then the loop (as a PR), then the Agent class, then targeted fixes for divergences found by comparison. That's how someone builds a thing incrementally, not how someone generates a complete project in one shot.
-
-Two mild tells:
-- The section dividers (`# ── Group 5: run_loop ──`) with box-drawing characters. Some developers use these genuinely, but they're more common in AI-generated code. Ambiguous.
-- The `COMPARISONS.md` "fidelity scorecard" with exact percentages (99% loop, 98% tools, 95% events, etc.) feels like something an AI would generate when asked "how faithful is this port?" A human would say "very close" or "a few gaps in streaming."
-
----
-
-## Test gaps
-
-- **Concurrent access**: What if `steer()` is called from one coroutine while `prompt()` is running in another? The steering queue is a plain list. Python async can interleave at `await` points. Probably fine, but untested.
-- **`_default_convert_to_llm`** with images: tested in isolation for thinking blocks, but no test proves that images actually get dropped.
-- **`_default_convert_to_llm` with Gemini metadata**: no test proves the default Agent converter preserves `provider_specific_fields` / `thought_signatures`.
-- **Abort before first chunk**: no test proves a pending `litellm.acompletion()` can actually be interrupted before it yields a response object.
-- **Nested cache creation accounting**: no direct test covers `usage.prompt_tokens_details.cache_creation_tokens`.
-- **No test for `agent_loop_continue` with a pre-existing multi-turn history** — the existing test starts from a tool result, but doesn't test resuming after multiple conversation turns with compacted context.
-
----
+- pending `litellm.acompletion()` cancellation before first chunk
+- default Agent converter preservation of Gemini `provider_specific_fields`
+- nested `prompt_tokens_details.cache_creation_tokens` usage extraction
+- default Agent converter behavior for multimodal tool results

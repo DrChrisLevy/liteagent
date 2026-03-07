@@ -30,8 +30,8 @@ Run `./dev lint` before committing.
 
 ## Inspiration for this project
 
-- This project is a port of pi-mono's agent loop. It is the source of truth for behavior. When in doubt, check the Pi source. It can be found at `../pi-mono/packages/agent/src/`. There are some minor differences in the implementation, but the behavior is the same for the most part.
-- See learnings/ for more details on documentation and differences.
+- This project is a port of pi-mono's agent loop. It is the source of truth for behavior. When in doubt, check the Pi source at `../pi-mono/packages/agent/src/`.
+- Read `./DESIGN_NOTES.md` for the high-level architecture, intent, and documented differences from pi-mono.
 - Pi blogs: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ and https://lucumr.pocoo.org/2026/1/31/pi/
   - explains some philosophy and design decisions.
 - `../litellm/` — litellm source (cloned locally). Docs: https://docs.litellm.ai/
