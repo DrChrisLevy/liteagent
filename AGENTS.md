@@ -43,16 +43,6 @@ Run `./dev lint` before committing.
 - `../agents/agents/agent.py` — human's existing Python agent loop
 - Pi blogs: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ and https://lucumr.pocoo.org/2026/1/31/pi/
 
-### Project docs
-- `PLAN.md` — how we work, build order, learning philosophy
-- `COMPARISONS.md` — how we differ from OpenAI SDK, Claude SDK, Pydantic AI, pi-mono (includes fidelity scorecard + litellm gap analysis)
-
-## Git & GitHub
-
-- `main` branch is stable. Feature branches for implementation.
-- Small, focused commits.
-- Use `gh` CLI for all GitHub operations. No MCP GitHub tools.
-
 ## Testing
 
 - Fast tests by default, slow tests (`@pytest.mark.slow`) need `-m slow`
@@ -60,9 +50,3 @@ Run `./dev lint` before committing.
 - **Control flow** (steering, follow-ups, error exits): fast tests, thin litellm mock
 - **Anything through litellm** (chunks, usage, stop reasons, thinking): live slow tests
 - Don't mock what you can test live. Mocks break silently when litellm changes.
-- Target models (must pass all five, four currently active):
-  - `anthropic/claude-opus-4-6`
-  - `anthropic/claude-sonnet-4-6`
-  - `gemini/gemini-3-flash-preview`
-  - `gemini/gemini-3.1-pro-preview` *(disabled — consistently timing out since March 2026)*
-  - `gpt-5.2`
