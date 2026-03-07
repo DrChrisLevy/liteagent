@@ -7,7 +7,7 @@ Inspired by [pi-mono](https://github.com/badlogic/pi-mono)'s agent loop — same
 ## Install
 
 ```bash
-pip install liteagent
+pip install git+https://github.com/DrChrisLevy/liteagent.git
 ```
 
 ## Quick start
