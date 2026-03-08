@@ -21,3 +21,6 @@ build/
 .mypy_cache/
 .coverage
 htmlcov/
+
+# Generated output
+learnings/investigate_output.txt
