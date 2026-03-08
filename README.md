@@ -76,7 +76,6 @@ agent = Agent(
     model="anthropic/claude-sonnet-4-6",  # any litellm model string
     tools=[...],                           # list of Tool objects
     system_prompt="...",                   # system prompt
-    convert_to_llm=None,                  # custom message converter (optional)
     transform_context=None,               # context transform hook (optional)
 )
 
@@ -120,6 +119,8 @@ context = AgentContext(system_prompt="...", messages=[...], tools=[...])
 
 await agent_loop(stream, config, context, signal=signal)
 ```
+
+`make_default_convert` strips liteagent metadata fields and handles provider quirks (e.g. hoisting images from tool results into synthetic user messages for OpenAI). The `Agent` class uses it by default — pass a custom `convert_to_llm` only if you need to map app-specific message types (like `bashExecution` → user message).
 
 ### Events
 
