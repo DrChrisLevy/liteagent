@@ -9,6 +9,7 @@ Faithful port of pi-mono's agent.ts.
 
 import asyncio
 
+from .convert import make_default_convert
 from .loop import agent_loop, agent_loop_continue
 from .types import AgentConfig, AgentContext, AgentState, _now_ms
 
@@ -30,39 +31,6 @@ def _to_user_msg(message):
     if isinstance(message, str):
         return {"role": "user", "content": message, "timestamp": _now_ms()}
     return message
-
-
-def _default_convert_to_llm(messages):
-    """Minimal convert_to_llm — strips our extras, keeps LLM-compatible fields."""
-    result = []
-    for m in messages:
-        role = m.get("role")
-        if role == "assistant":
-            msg = {"role": "assistant"}
-            if m.get("content"):
-                msg["content"] = m["content"]
-            if m.get("tool_calls"):
-                msg["tool_calls"] = m["tool_calls"]
-            if m.get("thinking_blocks"):
-                msg["thinking_blocks"] = m["thinking_blocks"]
-            if m.get("reasoning_content"):
-                msg["reasoning_content"] = m["reasoning_content"]
-            result.append(msg)
-        elif role == "user":
-            result.append({"role": "user", "content": m["content"]})
-        elif role == "tool":
-            content = m.get("content")
-            if isinstance(content, list):
-                text_parts = [b["text"] for b in content if b.get("type") == "text"]
-                content = "\n".join(text_parts)
-            result.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": m["tool_call_id"],
-                    "content": content,
-                }
-            )
-    return result
 
 
 class Agent:
@@ -92,7 +60,7 @@ class Agent:
             pending_tool_calls=set(),
             error=None,
         )
-        self._convert_to_llm = convert_to_llm or _default_convert_to_llm
+        self._convert_to_llm = convert_to_llm or make_default_convert(model)
         self._transform_context = transform_context
         self._max_tokens = max_tokens
         self._temperature = temperature

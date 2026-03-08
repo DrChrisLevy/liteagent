@@ -10,6 +10,7 @@ Faithful port of pi-mono's agent-loop.ts.
 """
 
 import asyncio
+import copy
 import inspect
 import json
 
@@ -254,7 +255,7 @@ async def stream_llm_response(context, config, signal, stream):
                 "function": {
                     "name": t.name,
                     "description": t.description,
-                    "parameters": t.parameters,
+                    "parameters": copy.deepcopy(t.parameters),
                 },
             }
             for t in context.tools

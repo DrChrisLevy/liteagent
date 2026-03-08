@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "litellm>=1.81.14",
+    "litellm>=1.82.0",
     "pydantic>=2.12.5",
 ]
 

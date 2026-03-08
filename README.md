@@ -76,7 +76,6 @@ agent = Agent(
     model="anthropic/claude-sonnet-4-6",  # any litellm model string
     tools=[...],                           # list of Tool objects
     system_prompt="...",                   # system prompt
-    convert_to_llm=None,                  # custom message converter (optional)
     transform_context=None,               # context transform hook (optional)
 )
 
@@ -112,14 +111,16 @@ search = Tool(
 For direct control without the `Agent` wrapper:
 
 ```python
-from liteagent import agent_loop, agent_loop_continue, EventStream, AgentConfig, AgentContext
+from liteagent import agent_loop, agent_loop_continue, make_default_convert, EventStream, AgentConfig, AgentContext
 
 stream = EventStream()
-config = AgentConfig(model="anthropic/claude-sonnet-4-6", convert_to_llm=my_converter)
+config = AgentConfig(model="anthropic/claude-sonnet-4-6", convert_to_llm=make_default_convert("anthropic/claude-sonnet-4-6"))
 context = AgentContext(system_prompt="...", messages=[...], tools=[...])
 
 await agent_loop(stream, config, context, signal=signal)
 ```
+
+`make_default_convert` strips liteagent metadata fields and handles provider quirks (e.g. hoisting images from tool results into synthetic user messages for OpenAI). The `Agent` class uses it by default — pass a custom `convert_to_llm` only if you need to map app-specific message types (like `bashExecution` → user message).
 
 ### Events
 
@@ -146,11 +147,11 @@ export GEMINI_API_KEY=...
 
 ## Design
 
-Four files, ~1200 lines total:
 
 - `stream.py` — async event stream (producer-consumer queue)
 - `types.py` — shared types (Tool, ToolResult, AgentConfig, etc.)
 - `loop.py` — stateless dual loop (LLM calls, tool execution, steering)
+- `convert.py` — default message converter (sole provider-specific boundary)
 - `agent.py` — stateful wrapper (message history, queues, subscriptions)
 
 See [DESIGN_NOTES.md](DESIGN_NOTES.md) for architecture decisions and pi-mono comparison.

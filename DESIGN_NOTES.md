@@ -93,12 +93,14 @@ The core package is intentionally small:
 - `stream.py`: async event stream
 - `types.py`: shared vocabulary
 - `loop.py`: stateless core loop
+- `convert.py`: default `convert_to_llm` — the sole provider-specific boundary
 - `agent.py`: stateful wrapper
 
 The split matters:
 
 - `loop.py` should stay focused on control flow
 - `agent.py` should stay focused on state, queues, and subscribers
+- `convert.py` is the only file that knows about provider differences
 - transport, UI, storage, and app-specific tools belong outside the library
 
 ## Design Principles
@@ -111,8 +113,8 @@ The split matters:
 
 ## Provider Boundary Principle
 
-The loop should not contain provider-specific branches like `if anthropic` or
-`if gemini`.
+The loop and agent should not contain provider-specific branches like
+`if anthropic` or `if gemini`.
 
 Provider leakage is acceptable in two forms only:
 
@@ -121,8 +123,14 @@ Provider leakage is acceptable in two forms only:
 - opaque preservation of fields we do not interpret, such as
   `provider_specific_fields`, `thinking_blocks`, and `reasoning_content`
 
-If request-shape differences need handling, that belongs in `convert_to_llm`,
-not in the loop itself.
+All provider-specific logic lives in `convert.py`. Currently this means:
+
+- stripping liteagent metadata fields (denylist, not allowlist — new fields
+  from litellm pass through automatically)
+- hoisting images from tool results into user messages for OpenAI, which
+  ignores image blocks in tool result content
+
+If litellm is ever replaced, `convert.py` is the boundary to update.
 
 ## Tool Model
 
@@ -186,9 +194,13 @@ Responses API support or us calling the OpenAI API directly for GPT-5 models.
 
 ### Tool-result images are provider-sensitive
 
-Anthropic and Gemini can work with image-bearing tool results more naturally
-than OpenAI's Chat Completions tool-message format. Any provider-specific
-workaround belongs in `convert_to_llm`.
+Anthropic and Gemini handle image-bearing tool results natively. OpenAI's Chat
+Completions API ignores image blocks in tool result content (confirmed
+empirically — the model receives the text but not the image).
+
+The default converter in `convert.py` handles this: for OpenAI models, it hoists
+images from tool results into synthetic user messages. This is transparent to
+consumers — multimodal tool results work identically across all providers.
 
 ### Usage shapes vary
 
