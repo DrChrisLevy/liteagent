@@ -25,35 +25,8 @@ Priority:
 
 | ID | Priority | Status | Summary |
 |---|---|---|---|
-| `CR-001` | `P1` | `open` | Abort cannot interrupt a pending LLM startup await |
 | `CR-005` | `P3` | `backlog` | Messages are still untyped dicts throughout the core loop |
 | `CR-006` | `P3` | `backlog` | Agent and loop both append messages, relying on copied lists |
-
-## Active Findings
-
-### `CR-001` Abort cannot interrupt pending LLM startup
-
-- Priority: `P1`
-- Status: `open`
-- Type: parity gap vs `pi-mono`
-- liteagent:
-  - `liteagent/loop.py:294-299`
-- pi-mono baseline:
-  - `../pi-mono/packages/agent/src/agent-loop.ts:233-237`
-- Design notes:
-  - `DESIGN_NOTES.md` sections `What We Deliberately Change` and `Provider Boundary Principle`
-- Why this matters:
-  - `agent.abort()` only flips an `asyncio.Event`.
-  - `stream_llm_response()` does not consult that signal until after `await litellm.acompletion(**kwargs)` returns.
-  - If provider startup is slow, rate-limited, or hung, the run stays busy even though the user already aborted.
-- Why `pi-mono` is different:
-  - `pi-mono` passes an `AbortSignal` into the provider stream function itself, so the request can be interrupted while startup is still pending.
-- Suggested fix:
-  - Make the LLM startup await cancellable, either by racing `acompletion()` against the signal or by wrapping the provider call in a task that can be cancelled safely.
-- Tests to add:
-  - pending `acompletion()` + pre-set signal => immediate `aborted`
-  - pending `acompletion()` + mid-await `abort()` => run resolves without waiting for first chunk
-
 
 ## Backlog
 
@@ -105,4 +78,4 @@ These are real but not worth mixing into the active bug list:
 
 If adding tests next, do these first:
 
-- pending `litellm.acompletion()` cancellation before first chunk
+- (none currently prioritized)
