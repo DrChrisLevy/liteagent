@@ -258,6 +258,32 @@ Possible future approaches:
   GPT-5.4 (setting `mode: responses` in the cost map), this fixes itself without
   any liteagent changes.
 
+## Known litellm Bugs Affecting liteagent
+
+### Gemini/Vertex handler mutates tool schemas in-place (CR-007)
+
+litellm's Vertex AI handler (`llms/vertex_ai/common_utils.py`) transforms tool
+parameter schemas to match Gemini's requirements — stripping empty `properties`,
+converting type arrays to `anyOf`, removing `additionalProperties`, etc. All of
+these mutations happen **in-place on the original dict**, not on a copy.
+
+If the same `Tool` object is used across multiple providers (e.g. Gemini then
+OpenAI in a loop), Gemini's handler corrupts the schema for subsequent calls.
+
+**Scope**: Only `vertex_ai/` does deep in-place schema mutations. Other providers
+(Anthropic, OpenAI, Bedrock) either don't touch tool schemas or only modify
+top-level request params.
+
+**liteagent fix**: `copy.deepcopy(t.parameters)` in `loop.py` when building tool
+schemas for litellm. The user's `Tool` objects are never exposed to provider
+mutations.
+
+**Message mutations**: The Gemini handler also does `messages.pop()` to extract
+system messages, and some providers (hosted_vllm, fireworks) mutate content lists
+in-place. The default converter's shallow-copy-per-message protects against most
+of this. A provider that mutates nested content blocks (list elements) could
+still corrupt originals, but no provider we currently use does this.
+
 ## Sources
 
 - litellm source: `../litellm/`

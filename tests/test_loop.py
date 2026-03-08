@@ -1764,6 +1764,43 @@ async def test_agent_loop_does_not_mutate_context_object(mock_llm):
     assert ctx.messages is original_messages
 
 
+async def test_agent_loop_does_not_mutate_tool_parameters(monkeypatch):
+    """Tool.parameters must survive provider-side mutation (CR-007).
+
+    litellm's Gemini handler pops empty 'properties' from the schema dict
+    in-place. If the loop passes Tool.parameters by reference, subsequent
+    calls with a different provider see the mangled schema.
+    """
+
+    async def gemini_like_acompletion(**kwargs):
+        for tool_schema in kwargs.get("tools", []):
+            params = tool_schema["function"]["parameters"]
+            if not params.get("properties"):
+                params.pop("properties", None)
+        return async_iter(
+            [make_chunk(make_delta(content="ok"))]
+        )
+
+    monkeypatch.setattr("liteagent.loop.litellm.acompletion", gemini_like_acompletion)
+    monkeypatch.setattr(
+        "liteagent.loop.litellm.stream_chunk_builder",
+        lambda _: make_final(content="ok"),
+    )
+
+    tool = _simple_tool("no_args")
+    original_params = {"type": "object", "properties": {}}
+    assert tool.parameters == original_params
+
+    ctx = make_context(tools=[tool])
+    user_msg = {"role": "user", "content": "hi", "timestamp": 0}
+    stream = agent_loop([user_msg], ctx, make_config())
+    await collect_events(stream)
+
+    assert tool.parameters == original_params, (
+        f"Tool.parameters mutated: {tool.parameters}"
+    )
+
+
 async def test_skip_tool_call_args_are_parsed_dict():
     """_skip_tool_call should parse JSON string args to dict."""
     stream = EventStream()
