@@ -17,7 +17,13 @@ import json
 import litellm
 
 from .stream import EventStream
-from .types import AgentContext, ToolResult, _now_ms
+from .types import (
+    AgentContext,
+    ToolResult,
+    _build_assistant_message,
+    _build_tool_result_message,
+    _extract_usage,
+)
 
 # Auto-fix provider message format issues:
 # - inserts placeholder user messages for alternating roles (Anthropic, Bedrock)
@@ -37,55 +43,12 @@ async def _maybe_await(fn, *args):
     return result
 
 
-def _extract_usage(usage):
-    if not usage:
-        return {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-        }
-    details = getattr(usage, "prompt_tokens_details", None)
-    # Anthropic: top-level cache_read_input_tokens / cache_creation_input_tokens
-    # OpenAI: prompt_tokens_details.cached_tokens (read only, no creation)
-    cache_read = (
-        getattr(usage, "cache_read_input_tokens", 0)
-        or (getattr(details, "cached_tokens", 0) or 0 if details else 0)
-        or 0
-    )
-    cache_creation = (
-        getattr(usage, "cache_creation_input_tokens", 0)
-        or (getattr(details, "cache_creation_tokens", 0) or 0 if details else 0)
-        or 0
-    )
-    return {
-        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-        "total_tokens": getattr(usage, "total_tokens", 0) or 0,
-        "cache_read_tokens": cache_read,
-        "cache_creation_tokens": cache_creation,
-    }
-
-
 def _validate_tool_args(tool, args_str):
     args = json.loads(args_str) if isinstance(args_str, str) else args_str
     if not tool.params_model:
         return args
     validated = tool.params_model(**args)
     return validated.model_dump()
-
-
-def _build_tool_result_message(tool_call_id, tool_name, result, is_error):
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call_id,
-        "name": tool_name,
-        "content": result.content,
-        "details": result.details or {},
-        "is_error": is_error,
-        "timestamp": _now_ms(),
-    }
 
 
 # ── Skip Tool Call ─────────────────────────────────────────────────────────
@@ -420,18 +383,11 @@ async def stream_llm_response(context, config, signal, stream):
 
     except Exception as e:
         # LLM error — build synthetic error message
-        error_msg = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": None,
-            "thinking_blocks": None,
-            "reasoning_content": None,
-            "model": config.model,
-            "usage": _extract_usage(None),
-            "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
-            "error_message": str(e),
-            "timestamp": _now_ms(),
-        }
+        error_msg = _build_assistant_message(
+            model=config.model,
+            stop_reason="aborted" if (signal and signal.is_set()) else "error",
+            error_message=str(e),
+        )
         if not message_started:
             stream.push({"type": "message_start", "message": error_msg})
         stream.push({"type": "message_end", "message": error_msg})
@@ -440,16 +396,9 @@ async def stream_llm_response(context, config, signal, stream):
 
     # 7. Build finalized assistant message from litellm's stream_chunk_builder
     if not chunks:
-        assistant_msg = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": None,
-            "thinking_blocks": None,
-            "reasoning_content": None,
-            "usage": _extract_usage(None),
-            "stop_reason": "aborted" if (signal and signal.is_set()) else "stop",
-            "timestamp": _now_ms(),
-        }
+        assistant_msg = _build_assistant_message(
+            stop_reason="aborted" if (signal and signal.is_set()) else "stop",
+        )
     else:
         final = litellm.stream_chunk_builder(chunks)
         msg = final.choices[0].message
@@ -478,17 +427,15 @@ async def stream_llm_response(context, config, signal, stream):
             else (chunk_finish_reason or final.choices[0].finish_reason or "stop")
         )
 
-        assistant_msg = {
-            "role": "assistant",
-            "content": msg.content or None,
-            "tool_calls": tool_calls,
-            "thinking_blocks": getattr(msg, "thinking_blocks", None) or None,
-            "reasoning_content": getattr(msg, "reasoning_content", None) or None,
-            "provider_specific_fields": getattr(msg, "provider_specific_fields", None),
-            "usage": _extract_usage(final.usage),
-            "stop_reason": stop_reason,
-            "timestamp": _now_ms(),
-        }
+        assistant_msg = _build_assistant_message(
+            content=msg.content or None,
+            tool_calls=tool_calls,
+            thinking_blocks=getattr(msg, "thinking_blocks", None) or None,
+            reasoning_content=getattr(msg, "reasoning_content", None) or None,
+            provider_specific_fields=getattr(msg, "provider_specific_fields", None),
+            usage=_extract_usage(final.usage),
+            stop_reason=stop_reason,
+        )
 
     # 8. Emit events + append to context
     if not message_started:
@@ -617,18 +564,11 @@ def agent_loop(prompts, context, config, signal=None):
             await run_loop(local_ctx, new_messages, config, signal, stream)
         except Exception as e:
             # Safety net — ensure stream always ends
-            error_msg = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": None,
-                "thinking_blocks": None,
-                "reasoning_content": None,
-                "model": config.model,
-                "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
-                "error_message": str(e),
-                "usage": _extract_usage(None),
-                "timestamp": _now_ms(),
-            }
+            error_msg = _build_assistant_message(
+                model=config.model,
+                stop_reason="aborted" if (signal and signal.is_set()) else "error",
+                error_message=str(e),
+            )
             stream.push({"type": "agent_end", "messages": [error_msg]})
             stream.end([error_msg])
         finally:
@@ -661,18 +601,11 @@ def agent_loop_continue(context, config, signal=None):
             stream.push({"type": "turn_start"})
             await run_loop(local_ctx, new_messages, config, signal, stream)
         except Exception as e:
-            error_msg = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": None,
-                "thinking_blocks": None,
-                "reasoning_content": None,
-                "model": config.model,
-                "stop_reason": "aborted" if (signal and signal.is_set()) else "error",
-                "error_message": str(e),
-                "usage": _extract_usage(None),
-                "timestamp": _now_ms(),
-            }
+            error_msg = _build_assistant_message(
+                model=config.model,
+                stop_reason="aborted" if (signal and signal.is_set()) else "error",
+                error_message=str(e),
+            )
             stream.push({"type": "agent_end", "messages": [error_msg]})
             stream.end([error_msg])
         finally:

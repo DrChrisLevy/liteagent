@@ -10,6 +10,78 @@ def _now_ms():
 StopReason = Literal["stop", "tool_calls", "length", "error", "aborted"]
 
 
+def _extract_usage(usage):
+    if not usage:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+        }
+    details = getattr(usage, "prompt_tokens_details", None)
+    # Anthropic: top-level cache_read_input_tokens / cache_creation_input_tokens
+    # OpenAI: prompt_tokens_details.cached_tokens (read only, no creation)
+    cache_read = (
+        getattr(usage, "cache_read_input_tokens", 0)
+        or (getattr(details, "cached_tokens", 0) or 0 if details else 0)
+        or 0
+    )
+    cache_creation = (
+        getattr(usage, "cache_creation_input_tokens", 0)
+        or (getattr(details, "cache_creation_tokens", 0) or 0 if details else 0)
+        or 0
+    )
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+        "cache_read_tokens": cache_read,
+        "cache_creation_tokens": cache_creation,
+    }
+
+
+def _build_assistant_message(
+    *,
+    content=None,
+    tool_calls=None,
+    thinking_blocks=None,
+    reasoning_content=None,
+    model=None,
+    usage=None,
+    stop_reason,
+    error_message=None,
+    provider_specific_fields=None,
+):
+    msg = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tool_calls,
+        "thinking_blocks": thinking_blocks,
+        "reasoning_content": reasoning_content,
+        "provider_specific_fields": provider_specific_fields,
+        "model": model,
+        "usage": usage or _extract_usage(None),
+        "stop_reason": stop_reason,
+        "timestamp": _now_ms(),
+    }
+    if error_message is not None:
+        msg["error_message"] = error_message
+    return msg
+
+
+def _build_tool_result_message(tool_call_id, tool_name, result, is_error):
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "name": tool_name,
+        "content": result.content,
+        "details": result.details or {},
+        "is_error": is_error,
+        "timestamp": _now_ms(),
+    }
+
+
 @dataclass
 class Tool:
     """A tool the LLM can call. Combines definition with execution."""
