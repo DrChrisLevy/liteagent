@@ -26,7 +26,6 @@ Priority:
 | ID | Priority | Status | Summary |
 |---|---|---|---|
 | `CR-005` | `P3` | `backlog` | Messages are still untyped dicts throughout the core loop |
-| `CR-006` | `P3` | `backlog` | Agent and loop both append messages, relying on copied lists |
 
 ## Backlog
 
@@ -46,27 +45,6 @@ Priority:
   - Add a shared assistant-message factory first.
   - Consider a lightweight typed message layer after that if the codebase keeps growing.
 
-### `CR-006` Message accumulation is coupled across Agent and loop
-
-- Priority: `P3`
-- Status: `backlog`
-- Type: design risk
-- liteagent:
-  - `liteagent/agent.py:328-331`
-  - `liteagent/agent.py:407-409`
-  - `liteagent/loop.py:497`
-  - `liteagent/loop.py:560-561`
-- Design notes:
-  - `DESIGN_NOTES.md` section `Architecture`
-- Why this matters:
-  - The loop appends to its local context, and the Agent also appends on every `message_end`.
-  - This is safe today because the Agent snapshots message history into a copied list before the run starts.
-  - If that copy disappears later, message accumulation will become subtly wrong.
-- Why this is not an active bug:
-  - The copy is intentional and documented in the spec.
-  - So current behavior is correct; the problem is that the ownership boundary is easy to break during refactors.
-- Suggested fix:
-  - Make ownership explicit in code comments or consolidate message accumulation behind one layer.
 
 ## Low-Value Cleanup
 
