@@ -39,6 +39,7 @@ MODELS = [
     {"model": "gpt-5.2", "reasoning_effort": "high"},
     {"model": "gpt-5.3-codex", "reasoning_effort": "high"},
     {"model": "gpt-5.4"},
+    {"model": "openai/responses/gpt-5.4", "reasoning_effort": "high"},
 ]
 
 # ── Image generation ─────────────────────────────────────────────────────

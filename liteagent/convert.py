@@ -20,6 +20,10 @@ _LITEAGENT_FIELDS = {
 
 
 def _is_openai_model(model):
+    # NOTE: This also matches openai/responses/gpt-5.4 (the Responses API bridge
+    # path). The bridge handles multimodal tool results natively, so hoisting is
+    # unnecessary there — but harmless since the bridge converts image_url blocks
+    # anyway. If the bridge path becomes common, this should exclude it.
     return model.startswith("gpt") or model.startswith("openai/")
 
 
