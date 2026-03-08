@@ -66,6 +66,7 @@ class Agent:
             pending_tool_calls=set(),
             error=None,
         )
+        self._custom_convert = convert_to_llm is not None
         self._convert_to_llm = convert_to_llm or make_default_convert(model)
         self._transform_context = transform_context
         self._max_tokens = max_tokens
@@ -202,6 +203,8 @@ class Agent:
 
     def set_model(self, model):
         self._state.model = model
+        if not self._custom_convert:
+            self._convert_to_llm = make_default_convert(model)
 
     def set_system_prompt(self, prompt):
         self._state.system_prompt = prompt

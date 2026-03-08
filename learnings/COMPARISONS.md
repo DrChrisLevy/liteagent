@@ -32,7 +32,7 @@ Python agent framework to compare against. Here's how we differ:
 | **Streaming tool output (`on_update`)** | Tools can push partial results (e.g., bash output line-by-line). OpenAI SDK tools return all-or-nothing. |
 | **`transform_context` hook** | Modify messages before each LLM call (compaction, injection, pruning). No equivalent in OpenAI SDK. |
 | **Truly LLM-agnostic** | litellm-first, no vendor coupling. OpenAI SDK is OpenAI-first with real lock-in concerns. |
-| **Minimal core** | Small, hackable codebase (4 files). OpenAI SDK is a much larger surface area. |
+| **Minimal core** | Small, hackable codebase (5 files). OpenAI SDK is a much larger surface area. |
 
 ### Different philosophies
 
@@ -134,7 +134,7 @@ Pydantic AI has no concept of steering or follow-ups.
 | **Stateful agent** | Message history persists across calls. Pydantic AI requires passing `message_history=` manually each time. |
 | **Dual while-loop architecture** | Inner loop (tools + steering), outer loop (follow-ups). Enables complex interaction patterns. |
 | **Sequential tool execution** | Enables steering between tools. Pydantic AI tool execution model doesn't support interruption. |
-| **Minimal core** | Small, hackable codebase (4 files). Pydantic AI is a large framework. |
+| **Minimal core** | Small, hackable codebase (5 files). Pydantic AI is a large framework. |
 
 ### Different philosophies
 

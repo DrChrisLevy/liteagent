@@ -106,21 +106,7 @@ search = Tool(
 )
 ```
 
-### Raw loop functions
-
-For direct control without the `Agent` wrapper:
-
-```python
-from liteagent import agent_loop, agent_loop_continue, make_default_convert, EventStream, AgentConfig, AgentContext
-
-stream = EventStream()
-config = AgentConfig(model="anthropic/claude-sonnet-4-6", convert_to_llm=make_default_convert("anthropic/claude-sonnet-4-6"))
-context = AgentContext(system_prompt="...", messages=[...], tools=[...])
-
-await agent_loop(stream, config, context, signal=signal)
-```
-
-`make_default_convert` strips liteagent metadata fields and handles provider quirks (e.g. hoisting images from tool results into synthetic user messages for OpenAI). The `Agent` class uses it by default — pass a custom `convert_to_llm` only if you need to map app-specific message types (like `bashExecution` → user message).
+The `Agent` uses `make_default_convert` internally, which strips liteagent metadata fields and handles provider quirks (e.g. hoisting images from tool results into synthetic user messages for OpenAI). Pass a custom `convert_to_llm` only if you need to map app-specific message types.
 
 ### Events
 

@@ -172,6 +172,62 @@ async def test_setters_take_effect_next_run(mock_llm):
     assert captured["model"] == "model-b"
 
 
+@pytest.mark.asyncio
+async def test_set_model_refreshes_converter(mock_llm):
+    """set_model() rebuilds the default converter so provider behavior changes."""
+    # Tool message with an image block — OpenAI needs hoisting, Anthropic doesn't
+    tool_msg = {
+        "role": "tool",
+        "tool_call_id": "tc1",
+        "content": [
+            {"type": "text", "text": "result"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ],
+    }
+
+    # Start with Anthropic — no image hoisting
+    agent = Agent(model="anthropic/claude-sonnet-4-6")
+    converted = agent._convert_to_llm([tool_msg])
+    assert len(converted) == 1  # tool message passes through as-is
+    assert isinstance(converted[0]["content"], list)  # image blocks preserved inline
+
+    # Switch to OpenAI — should now hoist images
+    agent.set_model("openai/gpt-4o")
+    converted = agent._convert_to_llm([tool_msg])
+    assert len(converted) == 2  # tool message + synthetic user message with image
+    assert converted[1]["role"] == "user"
+
+    # Switch back to Anthropic — hoisting should stop
+    agent.set_model("anthropic/claude-sonnet-4-6")
+    converted = agent._convert_to_llm([tool_msg])
+    assert len(converted) == 1
+
+
+@pytest.mark.asyncio
+async def test_set_model_preserves_custom_converter():
+    """set_model() does NOT rebuild when a custom converter was provided."""
+    calls = []
+
+    def custom_convert(messages):
+        calls.append(messages)
+        return messages
+
+    agent = Agent(model="anthropic/claude-sonnet-4-6", convert_to_llm=custom_convert)
+    agent.set_model("openai/gpt-4o")
+
+    tool_msg = {
+        "role": "tool",
+        "tool_call_id": "tc1",
+        "content": [
+            {"type": "text", "text": "result"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ],
+    }
+    converted = agent._convert_to_llm([tool_msg])
+    assert len(calls) == 1  # custom converter was called
+    assert len(converted) == 1  # no hoisting — custom converter passed through
+
+
 # ── Fast tests: reset ────────────────────────────────────────────────────
 
 
