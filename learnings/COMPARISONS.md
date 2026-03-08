@@ -163,4 +163,4 @@ Pydantic AI has no concept of steering or follow-ups.
 | **Streaming tools** | None | None | None | `on_update` callback |
 | **Lock-in** | Claude | OpenAI | None (but large framework) | None |
 | **Target user** | "Claude Code in my app" | "Multi-agent system fast" | "Type-safe AI apps in production" | "Understand the loop, build with it" |
-| **Size** | Medium | High | Large | 4 core files (litellm does the rest) |
+| **Size** | Medium | High | Large | 5 core files (litellm does the rest) |
