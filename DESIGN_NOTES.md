@@ -78,7 +78,10 @@ Compared to `pi-mono`, this repo uses:
 
 - `asyncio.Event` instead of `AbortSignal`
 - Pydantic instead of AJV for tool argument validation/coercion
-- plain message dicts instead of TypeScript unions
+- plain message dicts instead of TypeScript unions (construction is centralized
+  via `_build_assistant_message` and `_build_tool_result_message` factories in
+  `types.py`; a `TypedDict` layer for read-site type checking is a natural next
+  step if the codebase grows)
 - a single-consumer `EventStream` plus `Agent.subscribe()`
 - unified `message_update` events with a `delta_type` field instead of pi's
   granular event types (`text_start`/`text_delta`/`text_end`,
