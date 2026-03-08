@@ -25,25 +25,23 @@ Priority:
 
 | ID | Priority | Status | Summary |
 |---|---|---|---|
-| `CR-005` | `P3` | `backlog` | Messages are still untyped dicts throughout the core loop |
+| `CR-005` | `P3` | `backlog` | Messages are plain dicts — no typed layer yet |
 
 ## Backlog
 
-### `CR-005` Messages are still untyped dicts
+### `CR-005` Messages are plain dicts — no typed layer yet
 
 - Priority: `P3`
 - Status: `backlog`
 - Type: maintainability debt vs `pi-mono`
-- liteagent:
-  - assistant messages are hand-built in multiple places in `liteagent/loop.py` and `liteagent/agent.py`
-- pi-mono baseline:
-  - typed message unions in `../pi-mono/packages/agent/src/types.ts`
-- Why this matters:
-  - The code repeatedly constructs near-identical assistant-message dicts with `role`, `content`, `tool_calls`, `thinking_blocks`, `reasoning_content`, `usage`, `stop_reason`, and `timestamp`.
-  - A typo or omitted field becomes a silent `dict.get()` failure instead of a type error.
-- Suggested fix:
-  - Add a shared assistant-message factory first.
-  - Consider a lightweight typed message layer after that if the codebase keeps growing.
+- What we did:
+  - Added `_build_assistant_message` and `_build_tool_result_message` factories in `types.py`
+  - All construction sites now go through the factories (consistent shape, one place to update)
+- What remains:
+  - Messages are still plain dicts — readers use `.get()` / `[]` with no type checking
+  - pi-mono has typed unions (`UserMessage | AssistantMessage | ToolResultMessage`)
+  - A `TypedDict` layer would catch field typos at the read sites too
+  - Not urgent — the factories already prevent construction bugs
 
 
 ## Low-Value Cleanup
