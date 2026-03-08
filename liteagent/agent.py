@@ -11,7 +11,13 @@ import asyncio
 
 from .convert import make_default_convert
 from .loop import agent_loop, agent_loop_continue
-from .types import AgentConfig, AgentContext, AgentState, _now_ms
+from .types import (
+    AgentConfig,
+    AgentContext,
+    AgentState,
+    _build_assistant_message,
+    _now_ms,
+)
 
 
 def _has_nonempty_str(val):
@@ -326,26 +332,13 @@ class Agent:
                     raise Exception("Request was aborted")
 
         except Exception as e:
-            error_msg = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": None,
-                "thinking_blocks": None,
-                "reasoning_content": None,
-                "model": self._state.model,
-                "stop_reason": "aborted"
+            error_msg = _build_assistant_message(
+                model=self._state.model,
+                stop_reason="aborted"
                 if (self._signal and self._signal.is_set())
                 else "error",
-                "error_message": str(e),
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                    "cache_read_tokens": 0,
-                    "cache_creation_tokens": 0,
-                },
-                "timestamp": _now_ms(),
-            }
+                error_message=str(e),
+            )
             self._state.messages.append(error_msg)
             self._state.error = str(e)
             self._emit({"type": "agent_end", "messages": [error_msg]})
