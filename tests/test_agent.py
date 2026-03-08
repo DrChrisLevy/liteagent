@@ -4,6 +4,10 @@ Tests for the Agent class (agent.py).
 Fast tests use mocked litellm. Slow tests use real API calls.
 """
 
+import base64
+import io
+
+import numpy as np
 import pytest
 
 from liteagent.agent import Agent
@@ -543,56 +547,20 @@ async def test_prompt_with_images(mock_llm):
 ALL_MODELS = [
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
+    "gemini/gemini-3-pro-preview",
     "gemini/gemini-3-flash-preview",
-    # "gemini/gemini-3.1-pro-preview",  # consistently timing out
+    # "gemini/gemini-3.1-pro-preview",  # unreliable — garbage responses on tool result images
     "gpt-5.2",
+    "gpt-5.3-codex",
+    "gpt-5.4",
 ]
-
-
-def _make_convert(model):
-    def convert(messages):
-        result = []
-        for m in messages:
-            role = m.get("role")
-            if role == "assistant":
-                msg = {"role": "assistant"}
-                if m.get("content"):
-                    msg["content"] = m["content"]
-                if m.get("tool_calls"):
-                    msg["tool_calls"] = m["tool_calls"]
-                if m.get("thinking_blocks"):
-                    msg["thinking_blocks"] = m["thinking_blocks"]
-                if m.get("reasoning_content"):
-                    msg["reasoning_content"] = m["reasoning_content"]
-                result.append(msg)
-            elif role == "user":
-                result.append({"role": "user", "content": m["content"]})
-            elif role == "tool":
-                content = m.get("content")
-                if isinstance(content, list):
-                    text_parts = [b["text"] for b in content if b.get("type") == "text"]
-                    content = "\n".join(text_parts)
-                result.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": m["tool_call_id"],
-                        "content": content,
-                    }
-                )
-        return result
-
-    return convert
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("model", ALL_MODELS)
 async def test_agent_simple_prompt(model):
-    """Basic prompt through Agent API."""
-    agent = Agent(
-        model=model,
-        system_prompt="Be concise. One sentence max.",
-        convert_to_llm=_make_convert(model),
-    )
+    """Basic prompt through Agent API with default converter."""
+    agent = Agent(model=model, system_prompt="Be concise. One sentence max.")
     await agent.prompt("What is 2 + 2?")
 
     assistants = [m for m in agent.messages if m.get("role") == "assistant"]
@@ -604,7 +572,7 @@ async def test_agent_simple_prompt(model):
 @pytest.mark.slow
 @pytest.mark.parametrize("model", ALL_MODELS)
 async def test_agent_tool_round_trip(model):
-    """Tool execution through Agent API."""
+    """Tool execution through Agent API with default converter."""
 
     async def echo_exec(tool_call_id, params, signal=None, on_update=None):
         return ToolResult(content=[{"type": "text", "text": params["message"]}])
@@ -624,7 +592,6 @@ async def test_agent_tool_round_trip(model):
         model=model,
         tools=[echo_tool],
         system_prompt="Use the echo tool when asked. Be concise.",
-        convert_to_llm=_make_convert(model),
     )
     await agent.prompt("Echo 'hello world'")
 
@@ -637,11 +604,9 @@ async def test_agent_tool_round_trip(model):
 @pytest.mark.slow
 async def test_agent_multi_turn():
     """Two prompts — second references first turn's context."""
-    model = "anthropic/claude-sonnet-4-6"
     agent = Agent(
-        model=model,
+        model="anthropic/claude-sonnet-4-6",
         system_prompt="Be concise. Remember what the user says.",
-        convert_to_llm=_make_convert(model),
     )
 
     await agent.prompt("My favorite color is blue.")
@@ -654,12 +619,9 @@ async def test_agent_multi_turn():
 @pytest.mark.slow
 async def test_agent_abort_live():
     """Abort mid-stream — partial message with real content gets preserved."""
-
-    model = "anthropic/claude-sonnet-4-6"
     agent = Agent(
-        model=model,
+        model="anthropic/claude-sonnet-4-6",
         system_prompt="Write a very long essay about the history of computing.",
-        convert_to_llm=_make_convert(model),
     )
 
     chunk_count = 0
@@ -1203,58 +1165,154 @@ async def test_transform_context_called(mock_llm):
     assert "INJECTED" in sent_contents
 
 
-# ── Fast tests: _default_convert_to_llm thinking branches ─────────────────
+# ── Fast tests: default converter ─────────────────────────────────────────
 
 
-def test_default_convert_preserves_thinking_blocks():
-    """_default_convert_to_llm preserves thinking_blocks on assistant messages."""
-    from liteagent.agent import _default_convert_to_llm
+def test_default_convert_strips_liteagent_metadata():
+    """Default converter strips liteagent metadata, passes everything else.
+    Non-OpenAI: tool result images stay in the tool message.
+    """
+    from liteagent.convert import make_default_convert
 
+    convert = make_default_convert("anthropic/claude-sonnet-4-6")
     messages = [
         {
             "role": "assistant",
             "content": "Hello",
             "thinking_blocks": [{"type": "thinking", "thinking": "Let me think..."}],
             "reasoning_content": "I should say hello",
+            "provider_specific_fields": {"thought_signatures": ["sig123"]},
             "tool_calls": None,
             "usage": {"prompt_tokens": 10},
             "stop_reason": "stop",
+            "error_message": None,
             "timestamp": 12345,
-        }
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is this?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,abc"},
+                },
+            ],
+            "timestamp": 12346,
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "analyze",
+            "content": [
+                {"type": "text", "text": "result"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,xyz"},
+                },
+            ],
+            "details": {"extra": "ui-only"},
+            "is_error": False,
+            "timestamp": 12347,
+        },
     ]
-    converted = _default_convert_to_llm(messages)
+    converted = convert(messages)
+    assert len(converted) == 3
 
-    assert len(converted) == 1
-    msg = converted[0]
-    assert msg["thinking_blocks"] == [
+    # Assistant: thinking/reasoning/provider_specific_fields preserved, metadata stripped
+    asst = converted[0]
+    assert asst["thinking_blocks"] == [
         {"type": "thinking", "thinking": "Let me think..."}
     ]
-    assert msg["reasoning_content"] == "I should say hello"
-    assert msg["content"] == "Hello"
-    # Extras should be stripped
-    assert "usage" not in msg
-    assert "stop_reason" not in msg
-    assert "timestamp" not in msg
+    assert asst["reasoning_content"] == "I should say hello"
+    assert asst["provider_specific_fields"] == {"thought_signatures": ["sig123"]}
+    assert asst["content"] == "Hello"
+    assert "usage" not in asst
+    assert "stop_reason" not in asst
+    assert "timestamp" not in asst
+
+    # User: multimodal content preserved, metadata stripped
+    user = converted[1]
+    assert len(user["content"]) == 2
+    assert user["content"][1]["type"] == "image_url"
+    assert "timestamp" not in user
+
+    # Tool: multimodal content preserved (non-OpenAI), metadata stripped
+    tool = converted[2]
+    assert isinstance(tool["content"], list)
+    assert tool["content"][1]["type"] == "image_url"
+    assert tool["tool_call_id"] == "call_1"
+    assert "details" not in tool
+    assert "is_error" not in tool
+    assert "timestamp" not in tool
 
 
-def test_default_convert_skips_none_thinking():
-    """_default_convert_to_llm doesn't include None/empty thinking fields."""
-    from liteagent.agent import _default_convert_to_llm
+def test_default_convert_openai_hoists_tool_images():
+    """OpenAI converter hoists images from tool results into user messages."""
+    from liteagent.convert import make_default_convert
 
+    convert = make_default_convert("gpt-5.2")
     messages = [
         {
-            "role": "assistant",
-            "content": "Hello",
-            "thinking_blocks": None,
-            "reasoning_content": None,
-            "tool_calls": None,
-        }
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+                {"type": "text", "text": "Here is the chart."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,abc123"},
+                },
+            ],
+        },
     ]
-    converted = _default_convert_to_llm(messages)
+    converted = convert(messages)
 
-    msg = converted[0]
-    assert "thinking_blocks" not in msg
-    assert "reasoning_content" not in msg
+    # Should produce 2 messages: text-only tool + user message with image
+    assert len(converted) == 2
+
+    # Tool message: text only
+    assert converted[0]["role"] == "tool"
+    assert converted[0]["content"] == "Here is the chart."
+    assert converted[0]["tool_call_id"] == "call_1"
+
+    # User message: hoisted image
+    assert converted[1]["role"] == "user"
+    assert isinstance(converted[1]["content"], list)
+    assert converted[1]["content"][1]["type"] == "image_url"
+    assert "abc123" in converted[1]["content"][1]["image_url"]["url"]
+
+
+def test_default_convert_openai_no_hoist_text_only():
+    """OpenAI converter doesn't hoist when tool result has no images."""
+    from liteagent.convert import make_default_convert
+
+    convert = make_default_convert("gpt-5.2")
+    messages = [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Just text."}],
+        },
+    ]
+    converted = convert(messages)
+    assert len(converted) == 1
+    assert converted[0]["role"] == "tool"
+
+
+def test_default_convert_filters_non_llm_roles():
+    """Default converter filters out non-LLM message roles."""
+    from liteagent.convert import make_default_convert
+
+    convert = make_default_convert("anthropic/claude-sonnet-4-6")
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "you are helpful"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "custom_notification", "content": "ignored"},
+    ]
+    converted = convert(messages)
+    assert len(converted) == 2
+    assert converted[0]["role"] == "user"
+    assert converted[1]["role"] == "assistant"
 
 
 # ── Fast tests: mode getters/setters ──────────────────────────────────────
@@ -1274,3 +1332,330 @@ def test_follow_up_mode_getter_setter():
     assert agent.get_follow_up_mode() == "one-at-a-time"
     agent.set_follow_up_mode("all")
     assert agent.get_follow_up_mode() == "all"
+
+
+# ── Slow tests: multimodal + default converter ───────────────────────────
+#
+# These test the default converter through the Agent class with real API calls.
+# No custom convert_to_llm — exercises the denylist converter for all providers.
+# Covers: multimodal user messages, multimodal tool results, thinking round-trip.
+
+
+def _make_bar_chart_b64():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"]
+    values = [120, 135, 128, 142, 580, 131]
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(months, values, color=["#3498db" if v < 300 else "#e74c3c" for v in values])
+    ax.set_title("Monthly API Errors")
+    for i, v in enumerate(values):
+        ax.text(i, v + 15, str(v), ha="center", fontweight="bold")
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=72)
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _make_scatter_b64():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    np.random.seed(42)
+    x = np.append(np.random.normal(50, 10, 100), [90, 92, 88])
+    y = np.append(2.3 * x[:100] + np.random.normal(0, 15, 100), [50, 55, 48])
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.scatter(x[:100], y[:100], alpha=0.5, c="#3498db")
+    ax.scatter(x[100:], y[100:], c="#e74c3c", s=80)
+    ax.set_title("Latency vs Memory")
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=72)
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _make_heatmap_b64():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    np.random.seed(99)
+    data = np.random.poisson(5, (7, 24))
+    data[2, 2:5] = [45, 52, 38]  # Wednesday 2-4am hotspot
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.imshow(data, cmap="YlOrRd", aspect="auto")
+    ax.set_yticks(range(7), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+    ax.set_xlabel("Hour of Day")
+    ax.set_title("Error Rate Heatmap — May 2026")
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=72)
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", ALL_MODELS)
+async def test_agent_multimodal_user_message(model):
+    """User sends text + image — model sees the image and responds about it."""
+    chart_b64 = _make_bar_chart_b64()
+    agent = Agent(model=model, system_prompt="Be concise.")
+    await agent.prompt(
+        "Which month has the highest value in this chart? Reply with just the month name.",
+        images=[
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{chart_b64}"},
+            }
+        ],
+    )
+
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert assistants
+    answer = assistants[-1].get("content", "").lower()
+    assert "may" in answer, f"Expected 'may' in: {answer[:200]}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", ALL_MODELS)
+async def test_agent_multimodal_tool_result(model):
+    """Tool returns text + image — model must prove it saw the image.
+
+    The bar chart has an obvious spike in May (580 vs ~130 baseline).
+    The tool returns the chart image. The model must identify "May" from the image.
+    """
+    chart_b64 = _make_bar_chart_b64()
+
+    async def get_chart_exec(tool_call_id, params, signal=None, on_update=None):
+        return ToolResult(
+            content=[
+                {"type": "text", "text": "Here is the monthly error chart."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{chart_b64}"},
+                },
+            ],
+        )
+
+    chart_tool = Tool(
+        name="get_error_chart",
+        description="Get the monthly error chart. Returns text + chart image.",
+        parameters={"type": "object", "properties": {}},
+        execute=get_chart_exec,
+    )
+
+    agent = Agent(
+        model=model,
+        tools=[chart_tool],
+        system_prompt=(
+            "Use get_error_chart when asked. After seeing the chart, "
+            "answer the user's question about it. Be concise."
+        ),
+    )
+    await agent.prompt(
+        "Get the error chart, then tell me: which month has the highest error count? "
+        "Reply with just the month name."
+    )
+
+    # Must have called the tool
+    tool_msgs = [m for m in agent.messages if m.get("role") == "tool"]
+    assert tool_msgs, "Expected tool result message"
+
+    # Tool result should have multimodal content (not flattened to text)
+    tool_content = tool_msgs[0].get("content")
+    assert isinstance(tool_content, list), (
+        f"Expected list content, got {type(tool_content)}"
+    )
+    assert any(b.get("type") == "image_url" for b in tool_content), (
+        "Image block missing from tool result"
+    )
+
+    # Model must identify May from the chart image
+    assistants = [m for m in agent.messages if m.get("role") == "assistant"]
+    last = assistants[-1]
+    assert last.get("content"), "Expected text response after tool result"
+    answer = last["content"].lower()
+    assert "may" in answer, (
+        f"Model must see the chart image to identify May. Got: {answer[:300]}"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-sonnet-4-6",
+        "gemini/gemini-3-flash-preview",
+    ],
+)
+async def test_agent_thinking_round_trip(model):
+    """Multi-turn with thinking — signatures survive round-trip via default converter.
+
+    Turn 1: model reasons + responds
+    Turn 2: model responds using prior context (requires valid thinking signatures)
+    """
+    agent = Agent(model=model, system_prompt="Be concise. Show your reasoning.")
+    agent.set_thinking_level("high")
+
+    await agent.prompt(
+        "A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. "
+        "How much does the ball cost? Think carefully."
+    )
+
+    # Turn 1: check thinking fields exist
+    asst1 = [m for m in agent.messages if m.get("role") == "assistant"][0]
+    has_thinking = bool(asst1.get("thinking_blocks")) or bool(
+        asst1.get("reasoning_content")
+    )
+    has_psf = bool(asst1.get("provider_specific_fields"))
+    # At least one thinking indicator should be present
+    assert has_thinking or has_psf, (
+        f"Expected thinking content on {model}. "
+        f"thinking_blocks={bool(asst1.get('thinking_blocks'))}, "
+        f"reasoning_content={bool(asst1.get('reasoning_content'))}, "
+        f"provider_specific_fields={bool(asst1.get('provider_specific_fields'))}"
+    )
+
+    # Turn 2: this will fail if signatures were dropped by the converter
+    await agent.prompt(
+        "Now if the bat and ball cost $2.20 total and the bat costs $2.00 more "
+        "than the ball, how much does the ball cost?"
+    )
+
+    asst2_list = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert len(asst2_list) >= 2
+    asst2 = asst2_list[-1]
+    assert asst2.get("content"), "Expected response on turn 2"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("model", ALL_MODELS)
+async def test_agent_multimodal_multi_turn(model):
+    """4-turn multimodal flow matching investigate.py scenario.
+
+    Turn 1: user sends bar chart (May=580 spike) → model calls tool
+    Turn 2: tool returns scatter plot (outliers at high latency) → model responds
+    Turn 3: user sends heatmap (Wednesday 2-4am hotspot) → model must see the pattern
+    Turn 4: text-only summary → model must reference findings from all 3 images
+
+    Every turn asserts the model actually understood the image content.
+    """
+    chart_b64 = _make_bar_chart_b64()
+    scatter_b64 = _make_scatter_b64()
+    heatmap_b64 = _make_heatmap_b64()
+
+    async def analyze_exec(tool_call_id, params, signal=None, on_update=None):
+        return ToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": "See attached scatter plot.",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{scatter_b64}"},
+                },
+            ],
+        )
+
+    analyze_tool = Tool(
+        name="analyze_metrics",
+        description="Analyze metrics. Returns a scatter plot image.",
+        parameters={
+            "type": "object",
+            "properties": {"metric": {"type": "string"}},
+            "required": ["metric"],
+        },
+        execute=analyze_exec,
+    )
+
+    agent = Agent(
+        model=model,
+        tools=[analyze_tool],
+        system_prompt="Use analyze_metrics when asked to investigate. Be concise.",
+    )
+
+    # Turn 1: user sends bar chart → model should call tool
+    await agent.prompt(
+        "Here's an error chart. Which month has the spike? "
+        "Use analyze_metrics to investigate latency for that month.",
+        images=[
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{chart_b64}"},
+            }
+        ],
+    )
+
+    tool_msgs = [m for m in agent.messages if m.get("role") == "tool"]
+    assert tool_msgs, "Turn 1: expected tool call"
+
+    # Tool result should have multimodal content (image not flattened)
+    tool_content = tool_msgs[0].get("content")
+    assert isinstance(tool_content, list), "Turn 1: tool content should be list"
+    assert any(b.get("type") == "image_url" for b in tool_content), (
+        "Turn 1: image block missing from tool result"
+    )
+
+    # Turn 2: model saw bar chart in turn 1 — must mention May
+    assistants_t2 = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert assistants_t2, "Turn 2: expected assistant response"
+    # Check across ALL assistant messages (some models mention May before tool call,
+    # some after). At least one must reference the spike month.
+    all_assistant_text = " ".join(
+        a.get("content", "") or "" for a in assistants_t2
+    ).lower()
+    assert "may" in all_assistant_text, (
+        f"Turn 1-2: model must see bar chart and identify May. Got: {all_assistant_text[:300]}"
+    )
+
+    # Turn 3: user sends heatmap → model must see Wednesday pattern
+    await agent.prompt(
+        "Here's an error rate heatmap by hour and day of week for May. "
+        "Which day of the week has the concentrated error spike? "
+        "Reply mentioning the day name.",
+        images=[
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{heatmap_b64}"},
+            }
+        ],
+    )
+
+    assistants_t3 = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert len(assistants_t3) > len(assistants_t2), (
+        "Turn 3: expected new assistant response"
+    )
+    t3_text = assistants_t3[-1].get("content", "").lower()
+    assert "wednesday" in t3_text or "wed" in t3_text, (
+        f"Turn 3: model must see heatmap and identify Wednesday. Got: {t3_text[:300]}"
+    )
+
+    # Turn 4: text-only summary — model must remember all images
+    await agent.prompt(
+        "Summarize your findings from all three visuals. "
+        "Mention the spike month, the day-of-week pattern, and the latency anomaly."
+    )
+
+    assistants_t4 = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert len(assistants_t4) > len(assistants_t3), (
+        "Turn 4: expected new assistant response"
+    )
+    summary = assistants_t4[-1].get("content", "").lower()
+    assert summary, "Turn 4: expected text summary"
+    # Must reference findings from all 3 images
+    assert "may" in summary, f"Turn 4: summary must mention May. Got: {summary[:300]}"
+    assert "wednesday" in summary or "wed" in summary, (
+        f"Turn 4: summary must mention Wednesday. Got: {summary[:300]}"
+    )
+    assert "latency" in summary or "outlier" in summary or "memory" in summary, (
+        f"Turn 4: summary must mention latency/outlier/memory. Got: {summary[:300]}"
+    )

@@ -26,8 +26,6 @@ Priority:
 | ID | Priority | Status | Summary |
 |---|---|---|---|
 | `CR-001` | `P1` | `open` | Abort cannot interrupt a pending LLM startup await |
-| `CR-002` | `P2` | `open` | Default Agent converter drops Gemini `thought_signatures` |
-| `CR-003` | `P2` | `sharp-edge` | Default Agent converter drops tool-result images |
 | `CR-005` | `P3` | `backlog` | Messages are still untyped dicts throughout the core loop |
 | `CR-006` | `P3` | `backlog` | Agent and loop both append messages, relying on copied lists |
 
@@ -56,51 +54,6 @@ Priority:
   - pending `acompletion()` + pre-set signal => immediate `aborted`
   - pending `acompletion()` + mid-await `abort()` => run resolves without waiting for first chunk
 
-### `CR-002` Default Agent converter drops Gemini `thought_signatures`
-
-- Priority: `P2`
-- Status: `open`
-- Type: fidelity gap with a doc conflict
-- liteagent:
-  - `liteagent/agent.py:45-55`
-- pi-mono baseline:
-  - `../pi-mono/packages/agent/src/agent.ts:31-33`
-- Design notes:
-  - `DESIGN_NOTES.md` sections `Known LiteLLM-Driven Differences` and `Provider Boundary Principle`
-- Why this matters:
-  - The default converter preserves `thinking_blocks` and `reasoning_content`, but strips `provider_specific_fields`.
-  - Gemini stores `thought_signatures` in `provider_specific_fields`.
-  - The raw loop preserves them, but the default `Agent` path loses them unless the caller overrides `convert_to_llm`.
-- Why this is not just a nit:
-  - The provider notes explicitly say those signatures matter for multi-turn thinking fidelity.
-  - The spec's default-converter section documents the current stripping behavior, but the provider notes point the other way. That is a doc conflict worth resolving, not just a taste issue.
-- Suggested fix:
-  - Preserve `provider_specific_fields` on assistant messages in the default converter, or ship a provider-aware default converter.
-- Tests to add:
-  - default Agent converter round-trip preserves Gemini-style `provider_specific_fields`
-
-### `CR-003` Default Agent converter drops tool-result images
-
-- Priority: `P2`
-- Status: `sharp-edge`
-- Type: documented difference that weakens the default API
-- liteagent:
-  - `liteagent/agent.py:58-68`
-- pi-mono baseline:
-  - `../pi-mono/packages/agent/src/agent.ts:31-33`
-- Design notes:
-  - `DESIGN_NOTES.md` section `Known LiteLLM-Driven Differences`
-- Why this matters:
-  - Tool results with mixed `text` + `image_url` content are flattened to text in the default converter.
-  - Anthropic and Gemini can consume tool-result images, so multimodal tools lose information on the default Agent path.
-- Why this is `sharp-edge`, not `open`:
-  - The spec already documents the default converter as minimal and says consumers can override it for provider-specific multimodal behavior.
-  - So this is not hidden behavior. It is still a bad default for a library that otherwise supports multimodal tool results.
-- Suggested fix:
-  - Either preserve `image_url` for providers that support it, or make the default converter provider-aware and apply the OpenAI workaround automatically.
-- Tests to add:
-  - default converter image behavior for Anthropic / Gemini expectations
-  - default converter OpenAI fallback behavior if provider-aware conversion is added
 
 ## Backlog
 
@@ -153,5 +106,3 @@ These are real but not worth mixing into the active bug list:
 If adding tests next, do these first:
 
 - pending `litellm.acompletion()` cancellation before first chunk
-- default Agent converter preservation of Gemini `provider_specific_fields`
-- default Agent converter behavior for multimodal tool results

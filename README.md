@@ -146,11 +146,11 @@ export GEMINI_API_KEY=...
 
 ## Design
 
-Four files, ~1200 lines total:
 
 - `stream.py` — async event stream (producer-consumer queue)
 - `types.py` — shared types (Tool, ToolResult, AgentConfig, etc.)
 - `loop.py` — stateless dual loop (LLM calls, tool execution, steering)
+- `convert.py` — default message converter (sole provider-specific boundary)
 - `agent.py` — stateful wrapper (message history, queues, subscriptions)
 
 See [DESIGN_NOTES.md](DESIGN_NOTES.md) for architecture decisions and pi-mono comparison.
