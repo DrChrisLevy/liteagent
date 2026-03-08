@@ -112,10 +112,10 @@ search = Tool(
 For direct control without the `Agent` wrapper:
 
 ```python
-from liteagent import agent_loop, agent_loop_continue, EventStream, AgentConfig, AgentContext
+from liteagent import agent_loop, agent_loop_continue, make_default_convert, EventStream, AgentConfig, AgentContext
 
 stream = EventStream()
-config = AgentConfig(model="anthropic/claude-sonnet-4-6", convert_to_llm=my_converter)
+config = AgentConfig(model="anthropic/claude-sonnet-4-6", convert_to_llm=make_default_convert("anthropic/claude-sonnet-4-6"))
 context = AgentContext(system_prompt="...", messages=[...], tools=[...])
 
 await agent_loop(stream, config, context, signal=signal)

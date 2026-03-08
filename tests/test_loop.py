@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from pydantic import BaseModel
 
+from liteagent.convert import make_default_convert
 from liteagent.loop import (
     _build_tool_result_message,
     _extract_usage,
@@ -30,6 +31,7 @@ from liteagent.stream import EventStream
 from liteagent.types import AgentConfig, AgentContext, Tool, ToolResult
 from tests.mock_helpers import (
     _Obj,
+    async_iter,
     make_chunk,
     make_delta,
     make_final,
@@ -47,112 +49,6 @@ ALL_MODELS = [
     # "gemini/gemini-3.1-pro-preview",  # consistently timing out (March 2026)
     "gpt-5.2",
 ]
-
-
-# ── convert_to_llm (provider-aware) ───────────────────────────────────────
-
-
-def make_convert_to_llm(model: str):
-    """Build a convert_to_llm that handles OpenAI's string-only tool results."""
-    is_openai = model.startswith("gpt") or model.startswith("openai/")
-
-    def convert(messages: list) -> list:
-        result = []
-        pending_images = []
-
-        for m in messages:
-            # Flush pending images before any non-tool message
-            if pending_images and m.get("role") != "tool":
-                result.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Attached image(s) from tool result:",
-                            },
-                            *pending_images,
-                        ],
-                    }
-                )
-                pending_images = []
-
-            role = m.get("role")
-
-            if role == "assistant":
-                msg = {"role": "assistant"}
-                if m.get("content"):
-                    msg["content"] = m["content"]
-                if m.get("tool_calls"):
-                    msg["tool_calls"] = m["tool_calls"]
-                if m.get("thinking_blocks"):
-                    msg["thinking_blocks"] = m["thinking_blocks"]
-                if m.get("reasoning_content"):
-                    msg["reasoning_content"] = m["reasoning_content"]
-                result.append(msg)
-
-            elif role == "user":
-                result.append({"role": "user", "content": m["content"]})
-
-            elif role == "tool":
-                content = m.get("content")
-                if isinstance(content, list):
-                    text_parts = [b["text"] for b in content if b.get("type") == "text"]
-                    images = [b for b in content if b.get("type") == "image_url"]
-                    text = "\n".join(text_parts)
-
-                    if is_openai and images:
-                        result.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": m["tool_call_id"],
-                                "content": text or "(see attached image)",
-                            }
-                        )
-                        pending_images.extend(images)
-                    elif images:
-                        llm_blocks = [
-                            b for b in content if b.get("type") in ("text", "image_url")
-                        ]
-                        result.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": m["tool_call_id"],
-                                "content": llm_blocks,
-                            }
-                        )
-                    else:
-                        result.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": m["tool_call_id"],
-                                "content": text,
-                            }
-                        )
-                else:
-                    result.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": m["tool_call_id"],
-                            "content": content,
-                        }
-                    )
-
-        # Flush remaining images
-        if pending_images:
-            result.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Attached image(s) from tool result:"},
-                        *pending_images,
-                    ],
-                }
-            )
-
-        return result
-
-    return convert
 
 
 # ── Test tools ─────────────────────────────────────────────────────────────
@@ -1367,7 +1263,7 @@ async def test_simple_text_response(model):
         system_prompt="Reply with exactly one sentence.",
         messages=[],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     user_msg = {"role": "user", "content": "What is 2+2?", "timestamp": 0}
     stream = agent_loop([user_msg], context, config)
@@ -1409,7 +1305,7 @@ async def test_tool_execution(model):
         messages=[],
         tools=[ECHO_TOOL],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     user_msg = {"role": "user", "content": "Echo this: hello world", "timestamp": 0}
     stream = agent_loop([user_msg], context, config)
@@ -1458,7 +1354,7 @@ async def test_multimodal_spike_detection(model):
         messages=[],
         tools=[CHART_TOOL],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     # Turn 1: generate the chart
     user_msg = {
@@ -1566,7 +1462,7 @@ async def test_tool_error_recovery(model):
         messages=[],
         tools=[ALWAYS_FAIL_TOOL],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     user_msg = {
         "role": "user",
@@ -1609,7 +1505,7 @@ async def test_thinking_traces(model):
     )
     config = AgentConfig(
         model=model,
-        convert_to_llm=make_convert_to_llm(model),
+        convert_to_llm=make_default_convert(model),
         reasoning_effort="low",
     )
 
@@ -1633,7 +1529,7 @@ async def test_usage_present(model):
         system_prompt="Reply briefly.",
         messages=[],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     user_msg = {"role": "user", "content": "Say hello.", "timestamp": 0}
     stream = agent_loop([user_msg], context, config)
@@ -1660,7 +1556,7 @@ async def test_stop_reason_with_tools(model):
         messages=[],
         tools=[ECHO_TOOL],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     user_msg = {"role": "user", "content": "Echo 'test'", "timestamp": 0}
     stream = agent_loop([user_msg], context, config)
@@ -1704,7 +1600,7 @@ async def test_multi_tool_sequential_live(model):
         messages=[],
         tools=[tracking_tool],
     )
-    config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+    config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
 
     user_msg = {
         "role": "user",
@@ -1730,7 +1626,7 @@ async def test_abort_mid_stream_live():
     )
     config = AgentConfig(
         model="gemini/gemini-3-flash-preview",
-        convert_to_llm=make_convert_to_llm("gemini/gemini-3-flash-preview"),
+        convert_to_llm=make_default_convert("gemini/gemini-3-flash-preview"),
     )
 
     user_msg = {"role": "user", "content": "Write the essay now.", "timestamp": 0}
@@ -1777,9 +1673,7 @@ async def test_agent_loop_does_not_mutate_tool_parameters(monkeypatch):
             params = tool_schema["function"]["parameters"]
             if not params.get("properties"):
                 params.pop("properties", None)
-        return async_iter(
-            [make_chunk(make_delta(content="ok"))]
-        )
+        return async_iter([make_chunk(make_delta(content="ok"))])
 
     monkeypatch.setattr("liteagent.loop.litellm.acompletion", gemini_like_acompletion)
     monkeypatch.setattr(
@@ -1927,7 +1821,7 @@ async def test_anthropic_cache_tokens():
 
     async def _call():
         context = AgentContext(system_prompt=long_prompt, messages=[])
-        config = AgentConfig(model=model, convert_to_llm=make_convert_to_llm(model))
+        config = AgentConfig(model=model, convert_to_llm=make_default_convert(model))
         user_msg = {"role": "user", "content": "Say hi.", "timestamp": 0}
         stream = agent_loop([user_msg], context, config)
         events = await collect_events(stream)
@@ -1975,7 +1869,7 @@ async def test_gemini_provider_specific_fields_preserved(model):
     )
     config = AgentConfig(
         model=model,
-        convert_to_llm=make_convert_to_llm(model),
+        convert_to_llm=make_default_convert(model),
         reasoning_effort="low",
     )
 
@@ -2071,7 +1965,7 @@ async def test_max_tokens_stop_reason(model):
     )
     config = AgentConfig(
         model=model,
-        convert_to_llm=make_convert_to_llm(model),
+        convert_to_llm=make_default_convert(model),
         max_tokens=5,
     )
 
