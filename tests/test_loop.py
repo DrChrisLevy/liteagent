@@ -599,6 +599,18 @@ async def test_stream_empty_chunks(mock_llm):
     assert "message_end" in event_types(events)
 
 
+async def test_stream_sets_model_on_success(mock_llm):
+    """Successful assistant messages must include model from config."""
+    chunks = [make_chunk(make_delta(content="hi"))]
+    mock_llm(chunks, make_final(content="hi"))
+    ctx = make_context(messages=[{"role": "user", "content": "hi"}])
+    stream = EventStream()
+    msg = await stream_llm_response(ctx, make_config(model="my-model"), None, stream)
+    stream.end()
+
+    assert msg["model"] == "my-model"
+
+
 async def test_stream_abort_mid_stream(mock_llm):
     signal = asyncio.Event()
     signal.set()

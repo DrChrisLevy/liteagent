@@ -397,6 +397,7 @@ async def stream_llm_response(context, config, signal, stream):
     # 7. Build finalized assistant message from litellm's stream_chunk_builder
     if not chunks:
         assistant_msg = _build_assistant_message(
+            model=config.model,
             stop_reason="aborted" if (signal and signal.is_set()) else "stop",
         )
     else:
@@ -433,6 +434,7 @@ async def stream_llm_response(context, config, signal, stream):
             thinking_blocks=getattr(msg, "thinking_blocks", None) or None,
             reasoning_content=getattr(msg, "reasoning_content", None) or None,
             provider_specific_fields=getattr(msg, "provider_specific_fields", None),
+            model=config.model,
             usage=_extract_usage(final.usage),
             stop_reason=stop_reason,
         )
