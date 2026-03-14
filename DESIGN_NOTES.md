@@ -253,7 +253,3 @@ If these disagree, use this order:
 2. tests in `tests/`
 3. `pi-mono` source for intended parity
 4. this document for rationale and documented differences
-
-## Related Docs
-
-- `learnings/COMPARISONS.md` — how liteagent compares to OpenAI Agents SDK, Claude Agent SDK, and Pydantic AI
