@@ -1512,13 +1512,16 @@ async def test_agent_multimodal_tool_result(model):
         model=model,
         tools=[chart_tool],
         system_prompt=(
-            "Use get_error_chart when asked. After seeing the chart, "
-            "answer the user's question about it. Be concise."
+            "Use get_error_chart when asked. After seeing the chart image, "
+            "read the bar labels and heights carefully, then answer the user's "
+            "question. Reply with ONLY the month name, nothing else."
         ),
     )
     await agent.prompt(
         "Get the error chart, then tell me: which month has the highest error count? "
-        "Reply with just the month name."
+        "Look at the bar chart image carefully. The x-axis shows month names "
+        "(Jan, Feb, Mar, Apr, May, Jun) and the y-axis shows error counts. "
+        "Which month has the tallest bar? Reply with just the month name."
     )
 
     # Must have called the tool
