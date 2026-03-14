@@ -22,5 +22,8 @@ build/
 .coverage
 htmlcov/
 
+# Claude local settings
+.claude/settings.local.json
+
 # Generated output
 learnings/investigate_output.txt
