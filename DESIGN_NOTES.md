@@ -245,6 +245,67 @@ the code or tests should probably change too.
 - **GPT-5.2** `reasoning_effort` passes through correctly; the gap is only in
   reasoning *output* visibility (see GPT-5.2 reasoning gap above).
 
+## Pi-Mono Upstream Changes Not Ported
+
+Audit window: ~Feb–Apr 2026. Tracked here so future ports can pick up
+deliberately rather than rediscover. None are urgent; all are "consider when
+a real use case appears."
+
+**Most relevant to current consumers (`../agents`):** `Agent.signal` getter
+and awaited subscribers. The first matters if external async work needs to
+react to `agent.abort()`; the second matters the day anyone writes an
+`async def` subscriber (today's sync subscribers will silently drop the
+coroutine). The other six entries below are not relevant to anything in
+`../agents` or its TODO.
+
+### Parallel tool execution (`toolExecution: "parallel" | "sequential"`)
+Pi runs tool calls in an assistant turn concurrently, with a sequential
+preflight (validate args, run gating hooks) before fan-out. Liteagent is
+sequential by design — keeps steering simple. Skip unless multi-tool latency
+becomes a real complaint.
+
+### `prepareArguments` tool hook (pi commit `b5f425ad`, 2026-03-29)
+Optional per-tool function that runs *before* schema validation, used to fold
+legacy argument shapes (e.g. old `oldText`/`newText`) into the current
+schema. Only matters for resuming saved sessions across tool-schema changes.
+Skip unless liteagent grows long-lived persisted sessions.
+
+### `onPayload` / `onResponse` provider hooks (pi commits `a3f05423`, `d131fcd4`)
+Per-LLM-call callbacks: inspect (and optionally rewrite) the outgoing
+payload, inspect HTTP status + response headers (rate-limit headers
+especially). Already achievable via litellm's own callback system; skip
+unless a thin liteagent-level wrapper becomes worth the discoverability.
+
+### `Agent.signal` getter (pi commit `7d4faa08`, 2026-03-28)
+Exposes the active cancellation token to outside callers, so external async
+work (background tasks, websocket pings, typing indicators) can react to
+`agent.abort()`. Trivial to add (~5 lines) when a real use case appears.
+
+### Awaited subscribed event handlers (pi commit `9022a5b5`, 2026-03-30)
+**Breaking change in pi.** Subscribers were sync `(event) => void` (which is
+what liteagent ports today); pi changed to `(event, signal) => Promise|void`
+and the loop awaits each one before settling `prompt()`. Without this,
+`async def` subscribers in liteagent silently fail (coroutine never
+awaited). Add when any user writes an async subscriber and expects
+`await agent.prompt()` to wait for it.
+
+### `beforeToolCall` / `afterToolCall` hooks
+Gate tool execution (`{block: true, reason}`) or rewrite tool results.
+Liteagent's stance is "wrap your tools yourself." Reconsider if multiple
+consumers reimplement audit/permission/redaction the same way.
+
+### Deferred steering (pi commit `208a2cc1`, 2026-03-16)
+Pi changed steering from "interrupt mid-batch, skip remaining tools" to
+"let all tools finish, then process steer at turn boundary." Liteagent
+intentionally keeps the interrupt model — feels more responsive, saves
+tokens, emits explicit "Skipped due to queued user message" results
+(marked `is_error=True`). Different design, not a bug. Don't port.
+
+### AgentState property-access refactor (pi commit `cbe1a8b7`, 2026-03-30)
+TS-specific copy-on-write via getter/setter on `state.tools` /
+`state.messages`, replacing `setTools()` / `setMessages()` methods.
+Liteagent's `set_*` methods are perfectly Pythonic. Don't port.
+
 ## Current Source-of-Truth Order
 
 If these disagree, use this order:
